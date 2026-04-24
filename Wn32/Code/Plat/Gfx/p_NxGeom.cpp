@@ -504,6 +504,38 @@ bool CXboxGeom::plat_render(Mth::Matrix* pRootMatrix, Mth::Matrix* pBoneMatrices
 /*                                                                */
 /*                                                                */
 /******************************************************************/
+void CXboxGeom::plat_force_alpha_from_texture()
+{
+	if( !mp_instance ) return;
+	NxWn32::sScene *p_scene = mp_instance->GetScene();
+	if( !p_scene ) return;
+
+	for( int i = 0; i < p_scene->m_num_mesh_entries; ++i )
+	{
+		NxWn32::sMesh *p_mesh = p_scene->m_meshes[i];
+		if( !p_mesh || !p_mesh->mp_material ) continue;
+		for( uint32 pass = 0; pass < p_mesh->mp_material->m_passes && pass < NxWn32::MAX_PASSES; ++pass )
+		{
+			p_mesh->mp_material->m_flags[pass] |= MATFLAG_PASS_IGNORE_VERTEX_ALPHA;
+			p_mesh->mp_material->m_flags[pass] |= MATFLAG_TRANSPARENT;
+			p_mesh->mp_material->m_flags[pass] |= MATFLAG_SHADOW;
+
+			// PS2-authored shadow materials can have m_color.a = 0 which zeroes alpha even with IGNORE_VERTEX_ALPHA.
+			p_mesh->mp_material->m_color[pass][3] = 1.0f;
+
+			// High byte of m_reg_alpha is the per-pass fixed alpha used by mesh.cpp blend setup.
+			// Force to 128 (unity) so the shadow is not gated by an authored-zero fixed alpha.
+			p_mesh->mp_material->m_reg_alpha[pass] = (p_mesh->mp_material->m_reg_alpha[pass] & 0x00FFFFFFu) | (128u << 24);
+		}
+	}
+}
+
+
+
+/******************************************************************/
+/*                                                                */
+/*                                                                */
+/******************************************************************/
 void CXboxGeom::plat_set_bone_matrix_data( Mth::Matrix* pBoneMatrices, int numBones )
 {
 	if( mp_instance )

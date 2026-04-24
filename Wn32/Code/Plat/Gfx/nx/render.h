@@ -36,9 +36,9 @@ namespace NxWn32
 		sTexture		*p_texture;
 		Nx::CXboxModel	*p_model;
 		sScene			*p_scene;
-		// XGMATRIX		view_matrix;
-		// XGMATRIX		projection_matrix;
-		// XGMATRIX		texture_projection_matrix;
+		glm::mat4		view_matrix;
+		glm::mat4		projection_matrix;
+		glm::mat4		texture_projection_matrix;
 	};
 
 
@@ -97,8 +97,8 @@ namespace NxWn32
 	
 	void		create_texture_projection_details( sTexture *p_texture, Nx::CXboxModel *p_model, sScene *p_scene );
 	void		destroy_texture_projection_details( sTexture *p_texture );
-	// void		set_texture_projection_camera( sTexture *p_texture, XGVECTOR3 *p_pos, XGVECTOR3 *p_at );
-	// void		calculate_tex_proj_matrix( XGMATRIX *p_tex_view_matrix, XGMATRIX *p_tex_proj_matrix, XGMATRIX *p_tex_transform_matrix, XGMATRIX *p_world_matrix = nullptr );
+	void		set_texture_projection_camera( sTexture *p_texture, const glm::vec3 &pos, const glm::vec3 &at );
+	void		calculate_tex_proj_matrix( const glm::mat4 &view, const glm::mat4 &proj, glm::mat4 &out_tex_proj, const glm::mat4 *p_world = nullptr );
 	
 	// MSM PERFCHANGE - added scale.
 	void set_dimensions(int width, int height);

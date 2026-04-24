@@ -180,9 +180,28 @@ void CSkaterCorePhysicsComponent::Finalize (   )
 void CSkaterCorePhysicsComponent::Update()
 {
 	DUMP_POSITION;
-	
+
 	m_frame_length = Tmr::FrameLength();
-	
+
+	// L1+R1 chord: spawn the SwitchToWalkingPhysics script. The script handles
+	// event broadcasts, trick-queue clear, looping-sound toggle, and the actual
+	// state flip via SkaterPhysicsControl_SwitchSkatingToWalking. Guarded so
+	// holding the chord does not re-spawn every frame.
+	if (mp_input_component && mp_physics_control_component)
+	{
+		CControlPad& control_pad = mp_input_component->GetControlPad();
+		if (control_pad.m_L1.GetPressed() && control_pad.m_R1.GetPressed())
+		{
+			control_pad.m_L1.ClearTrigger();
+			control_pad.m_R1.ClearTrigger();
+			if (!mp_physics_control_component->IsWalking())
+			{
+				GetObj()->SpawnScriptPlease(Crc::ConstCRC("SwitchToWalkingPhysics"), nullptr);
+			}
+			return;
+		}
+	}
+
 	// bool up = GetVel()[Y] > 0.0f;
 
 	m_landed_this_frame = false;

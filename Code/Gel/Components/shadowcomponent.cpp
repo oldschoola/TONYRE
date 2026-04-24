@@ -131,6 +131,15 @@ void CShadowComponent::InitFromStructure( Script::CStruct* pParams )
 				pSimpleShadow->SetScale( scale );
 				pSimpleShadow->SetModel( p_shadow_model_name );
 
+				{
+					FILE *f = fopen("shadow_diag.log", "a");
+					if (f) {
+						fprintf(f, "SHADOW_CREATE: objID=%u shadow=%p model='%s' scale=%.2f\n",
+							(unsigned)GetObj()->GetID(), (void*)pSimpleShadow, p_shadow_model_name, scale);
+						fclose(f);
+					}
+				}
+
 				// GJ:  need to immediately change the shadow's position if Obj_ShadowOn gets called
 				// this is because sometimes the shadow component will be suspended, and so
 				// update_shadow() won't get called (fixes shadow appearing at the origin in SC2)

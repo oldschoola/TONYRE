@@ -25,9 +25,10 @@
 
 #include <stdlib.h>
 #include <string.h>
-		 
+
 #include <Core/Defines.h>
 #include <Sys/sioman.h>
+#include <Sys/timer.h>
 #include <Sys/Mem/memman.h>
 #include <Sk/ParkEditor2/ParkEd.h>
 #include <Gel/Scripting/script.h>
@@ -36,6 +37,10 @@
 #include <Sys/Config/config.h>
 
 #include "SDL.h"
+
+#include "DualSense/DualSense_Pump.h"
+
+#include <GCore/Interfaces/ISonyGamepad.h>
 
 //#include <libpad.h>
 
@@ -90,7 +95,9 @@ int gLastPadPressed=0;
 	
 void Device::process( void )
 {
-	if (m_data.m_port == 0 && m_data.m_slot == 0)
+	// Every port polls its own pad. read_data() handles DualSense first,
+	// then falls back to the keyboard when no pad is bound to this port.
+	if (m_data.m_slot == 0)
 	{
 		m_plugged_in = true;
 		read_data();
@@ -147,6 +154,28 @@ void Device::wait( void )
 
 void Device::read_data ( void )
 {
+	// DualSense / DualShock 4 path. Pump the pad's input buffer then map it
+	// into the PS2-style DUALSHOCK2 layout the rest of the engine reads.
+	ISonyGamepad* pad = DualSensePump::GetPadForPort( m_data.m_port );
+	if (pad && pad->IsConnected())
+	{
+		// UpdateInput() is pumped once per frame in DualSensePump::Tick(),
+		// so this path just samples the already-fresh front buffer.
+		DualSensePump::PumpInputToPS2Buffer( pad, m_data.m_control_data );
+		m_data.m_valid = true;
+		m_plugged_in = true;
+		return;
+	}
+
+	// Keyboard fallback is only meaningful on port 0. Other ports stay idle
+	// (no valid data, no phantom inputs) when no pad is attached.
+	if (m_data.m_port != 0)
+	{
+		m_data.m_valid = false;
+		m_plugged_in = false;
+		return;
+	}
+
 	const Uint8 *keystate = SDL_GetKeyboardState(nullptr);
 
 	m_data.m_valid = true;
@@ -596,8 +625,29 @@ void Device::Unacquire ( void )
 /******************************************************************/
 void Device::ActivateActuator( int act_num, int percent )
 {
-	(void)act_num;
-	(void)percent;
+	if (m_data.m_actuators_disabled)
+	{
+		return;
+	}
+
+	if (percent < 0)   percent = 0;
+	if (percent > 100) percent = 100;
+	const std::uint8_t strength = static_cast<std::uint8_t>((percent * 255) / 100);
+
+	if (act_num == 0)
+	{
+		m_left_rumble = strength;
+	}
+	else if (act_num == 1)
+	{
+		m_right_rumble = strength;
+	}
+	else
+	{
+		return;
+	}
+
+	DualSensePump::SetRumble( m_data.m_port, m_left_rumble, m_right_rumble );
 
 	/*
 	// Do nothing if the actuators are disabled.
@@ -639,27 +689,15 @@ void Device::ActivateActuator( int act_num, int percent )
 /******************************************************************/
 void Device::DisableActuators()
 {
-	/*
-	// If disabled already do nothing.
-	if( m_data.m_actuators_disabled )
+	if (m_data.m_actuators_disabled)
 	{
 		return;
 	}
-		
-	// Run through all the actuators and make sure they're off.
-	if(( m_state == vACQUIRED ) && ( m_data.m_caps.TestMask( mACTUATORS )))
-	{
-		for( int i = 0; i < m_data.m_num_actuators; ++i )
-		{
-			// Switch it off.
-			m_data.m_actuator_direct[i] = 0;
-		}	
-		set_xbox_actuators( m_data.m_handle, 0, 0 );
-	}	
-	
-	// Set the flag.
+
+	m_left_rumble  = 0;
+	m_right_rumble = 0;
+	DualSensePump::SetRumble( m_data.m_port, 0, 0 );
 	m_data.m_actuators_disabled = true;
-	*/
 }
 
 
@@ -670,9 +708,7 @@ void Device::DisableActuators()
 /******************************************************************/
 void Device::EnableActuators( void )
 {
-	/*
 	m_data.m_actuators_disabled = false;
-	*/
 }
 
 
@@ -683,20 +719,9 @@ void Device::EnableActuators( void )
 /******************************************************************/
 void Device::ResetActuators( void )
 {
-	/*
-	if( m_data.m_actuators_disabled )
-	{
-		// If disabled, then should be off anyway but toggle the states to make sure.
-		EnableActuators();
-		DisableActuators();
-	}
-	else
-	{
-		// If enabled, then we disable them, which switched them off and then enable them again (in the off position).
-		DisableActuators();
-		EnableActuators();
-	}
-	*/
+	m_left_rumble  = 0;
+	m_right_rumble = 0;
+	DualSensePump::SetRumble( m_data.m_port, 0, 0 );
 }
 
 
@@ -711,26 +736,16 @@ void Device::ResetActuators( void )
 
 void Device::Pause( void )
 {
-	/*
-	// If paused already do nothing.
-	if( !m_data.m_paused_ref.InUse())
-	{		
-		// First, make sure we're in a ready state and our controller has actuators
-		if(( m_state == vACQUIRED ) && ( m_data.m_caps.TestMask( mACTUATORS )))
-		{
-			for( int i = 0; i<m_data.m_num_actuators; ++i )
-			{
-				// Save the old actuator vibration strength.
-				m_data.m_actuator_old_direct[i] = m_data.m_actuator_direct[i];
-
-				// Then switch it off.
-				m_data.m_actuator_direct[i] = 0;
-			}	
-			set_xbox_actuators( m_data.m_handle, 0, 0 );
-		}	
+	// If not already paused, snapshot current rumble and switch motors off.
+	if (!m_data.m_paused_ref.InUse())
+	{
+		m_left_rumble_saved  = m_left_rumble;
+		m_right_rumble_saved = m_right_rumble;
+		m_left_rumble  = 0;
+		m_right_rumble = 0;
+		DualSensePump::SetRumble( m_data.m_port, 0, 0 );
 	}
 	m_data.m_paused_ref.Acquire();
-	*/
 }
 
 
@@ -743,28 +758,16 @@ void Device::Pause( void )
 
 void Device::UnPause( void )
 {
-	/*
-	// If not paused, do nothing.
-	if( m_data.m_paused_ref.InUse())
-	{		
+	if (m_data.m_paused_ref.InUse())
+	{
 		m_data.m_paused_ref.Release();
-		if( !m_data.m_paused_ref.InUse())
+		if (!m_data.m_paused_ref.InUse())
 		{
-			// First, make sure we're in a ready state and our controller has actuators
-			if(( m_state == vACQUIRED ) && ( m_data.m_caps.TestMask( mACTUATORS )))
-			{
-				for( int i = 0; i < m_data.m_num_actuators; ++i )
-				{
-					// Restore the saved vibration strength.
-					m_data.m_actuator_direct[i] = m_data.m_actuator_old_direct[i];
-				}
-				set_xbox_actuators( m_data.m_handle,
-									(unsigned short)m_data.m_actuator_direct[0] * 256,
-									(unsigned short)m_data.m_actuator_direct[1] * 256 );
-			}	
+			m_left_rumble  = m_left_rumble_saved;
+			m_right_rumble = m_right_rumble_saved;
+			DualSensePump::SetRumble( m_data.m_port, m_left_rumble, m_right_rumble );
 		}
 	}
-	*/
 }
 
 
@@ -776,18 +779,11 @@ void Device::UnPause( void )
 /******************************************************************/
 void Device::StopAllVibrationIncludingSaved()
 {
-	/*
-	// First, make sure we're in a ready state and our controller has actuators
-	if(( m_state == vACQUIRED ) && ( m_data.m_caps.TestMask( mACTUATORS )))
-	{
-		for( int i = 0; i < m_data.m_num_actuators; ++i )
-		{
-			m_data.m_actuator_direct[i]		= 0;
-			m_data.m_actuator_old_direct[i]	= 0;
-		}	
-		set_xbox_actuators( m_data.m_handle, 0, 0 );
-	}	
-	*/
+	m_left_rumble        = 0;
+	m_right_rumble       = 0;
+	m_left_rumble_saved  = 0;
+	m_right_rumble_saved = 0;
+	DualSensePump::SetRumble( m_data.m_port, 0, 0 );
 }
 
 
@@ -827,6 +823,47 @@ void Device::DeactivatePressureSensitiveMode( void )
 		}
 	}
 	*/
+}
+
+/******************************************************************/
+/* DualSense output: adaptive trigger preset.                     */
+/* Hand  0=L2, 1=R2, 2=both. Preset matches DualSensePump table.  */
+/******************************************************************/
+void Device::SetAdaptiveTriggerPreset( int hand, int preset )
+{
+	DualSensePump::SetAdaptiveTriggerPreset( m_data.m_port, hand, preset );
+}
+
+/******************************************************************/
+/* DualSense output: lightbar RGB.                                */
+/******************************************************************/
+void Device::SetLightbarColor( std::uint8_t r, std::uint8_t g, std::uint8_t b )
+{
+	DualSensePump::SetLightbar( m_data.m_port, r, g, b );
+}
+
+/******************************************************************/
+/* DualSense output: player LED (0..3 clamped).                   */
+/******************************************************************/
+void Device::SetPlayerLedIndex( int zero_based )
+{
+	DualSensePump::SetPlayerLed( m_data.m_port, zero_based );
+}
+
+/******************************************************************/
+/* DualSense input: touchpad (front finger).                      */
+/******************************************************************/
+bool Device::GetTouchpadPosition( float& x, float& y, bool& touching )
+{
+	return DualSensePump::GetTouchpad( m_data.m_port, x, y, touching );
+}
+
+/******************************************************************/
+/* DualSense input: gyroscope (angular velocity).                 */
+/******************************************************************/
+bool Device::GetGyro( float& x, float& y, float& z )
+{
+	return DualSensePump::GetGyro( m_data.m_port, x, y, z );
 }
 
 /******************************************************************/

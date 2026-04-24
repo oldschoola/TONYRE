@@ -72,6 +72,7 @@ private:						// It's all private, as it is machine specific
 	virtual Mth::Vector				plat_get_scale( void ) const;
 	virtual void					plat_rotate_y( Mth::ERot90 rot );
 	virtual bool					plat_render( Mth::Matrix* pRootMatrix, Mth::Matrix* ppBoneMatrices, int numBones );
+	virtual void					plat_force_alpha_from_texture();
 	virtual void					plat_set_bone_matrix_data( Mth::Matrix* pBoneMatrices, int numBones );
 	virtual bool					plat_hide_polys( uint32 mask );
 	virtual uint32					plat_get_visibility( void ) const;

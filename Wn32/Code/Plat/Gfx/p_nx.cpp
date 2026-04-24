@@ -18,6 +18,8 @@
 #include "p_NxGeom.h"
 #include "p_NxSprite.h"
 #include "p_NxModel.h"
+#include "p_nxtexture.h"
+#include "p_nxscene.h"
 #include "p_nxnewparticlemgr.h"
 #include "p_nxweather.h"
 
@@ -160,6 +162,12 @@ namespace Nx
 		glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
 		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
+		// Render detailed shadow casters into their projector FBOs before the world
+		// is drawn. render_shadow_targets binds/unbinds its own FBO so the backbuffer
+		// remains the target afterwards; it also publishes shadow_texture_id +
+		// shadow_tex_proj_matrix into EngineGlobals for the mesh draw path to sample.
+		NxWn32::render_shadow_targets();
+
 		// Process imposters
 		CEngine::sGetImposterManager()->ProcessImposters();
 
@@ -285,11 +293,31 @@ namespace Nx
 			NxWn32::render_instances(NxWn32::vRENDER_SEMITRANSPARENT | NxWn32::vRENDER_INSTANCE_POST_WORLD_SEMITRANSPARENT);
 		}
 
+		#define FRAME_TRACE(tag) do { \
+			FILE *_f = fopen("frame_trace.log", "a"); \
+			if (_f) { fprintf(_f, "%s\n", tag); fclose(_f); } \
+		} while(0)
+
+		FRAME_TRACE("post-viewport-loop");
+
+		// Update + render new-style particles once per frame, after all viewports are drawn.
+		if (CEngine::sGetParticleManager())
+		{
+			FRAME_TRACE("pre-particle-update");
+			CEngine::sGetParticleManager()->UpdateParticles();
+			FRAME_TRACE("post-particle-update");
+			CEngine::sGetParticleManager()->RenderParticles();
+			FRAME_TRACE("post-particle-render");
+		}
+
 		// Reset viewport
 		glViewport(0, 0, NxWn32::EngineGlobals.backbuffer_width, NxWn32::EngineGlobals.backbuffer_height);
+		FRAME_TRACE("post-viewport-reset");
 
 		// Draw 2D sprites
 		NxWn32::SDraw2D::DrawAll();
+		FRAME_TRACE("post-sdraw2d-drawall");
+		#undef FRAME_TRACE
 	}
 
 
@@ -782,11 +810,15 @@ namespace Nx
 	/******************************************************************/
 	Nx::CTexture *CEngine::s_plat_create_render_target_texture(int width, int height, int depth, int z_depth)
 	{
-		(void)width;
-		(void)height;
-		(void)depth;
-		(void)z_depth;
-		return nullptr;
+		CXboxTexture *p_tex = new CXboxTexture;
+		NxWn32::sTexture *p_engine_tex = new NxWn32::sTexture;
+		p_tex->SetEngineTexture(p_engine_tex);
+		if( !p_engine_tex->SetRenderTarget(width, height, depth, z_depth) )
+		{
+			FILE *f = fopen("shadow_diag.log", "a");
+			if (f) { fprintf(f, "s_plat_create_render_target_texture: FAILED w=%d h=%d\n", width, height); fclose(f); }
+		}
+		return p_tex;
 	}
 
 
@@ -797,9 +829,35 @@ namespace Nx
 	/******************************************************************/
 	void CEngine::s_plat_project_texture_into_scene(Nx::CTexture *p_texture, Nx::CModel *p_model, Nx::CScene *p_scene)
 	{
-		(void)p_texture;
-		(void)p_model;
-		(void)p_scene;
+		if( !p_texture || !p_model ) return;
+
+		CXboxTexture *p_xbox_tex = static_cast<CXboxTexture*>(p_texture);
+		CXboxModel   *p_xbox_model = static_cast<CXboxModel*>(p_model);
+		NxWn32::sTexture *p_engine_tex = p_xbox_tex->GetEngineTexture();
+		NxWn32::sScene   *p_engine_scene = nullptr;
+
+		// If scene not explicitly passed, derive from caster model's first geom's instance.
+		if( p_scene )
+		{
+			CXboxScene *p_xbox_scene = static_cast<CXboxScene*>(p_scene);
+			p_engine_scene = p_xbox_scene->GetEngineScene();
+		}
+
+		NxWn32::create_texture_projection_details(p_engine_tex, p_xbox_model, p_engine_scene);
+
+		// Register every loaded world scene as a receiver so the skater's shadow falls onto the world.
+		for (int i = 0; i < MAX_LOADED_SCENES; ++i)
+		{
+			if( sp_loaded_scenes[i] == nullptr ) continue;
+			CXboxScene *p_xb = static_cast<CXboxScene*>(sp_loaded_scenes[i]);
+			if( p_xb && p_xb->GetEngineScene() )
+			{
+				p_xb->GetEngineScene()->m_flags |= SCENE_FLAG_RECEIVE_SHADOWS;
+			}
+		}
+
+		FILE *f = fopen("shadow_diag.log", "a");
+		if (f) { fprintf(f, "s_plat_project_texture_into_scene: tex=%p model=%p\n", (void*)p_engine_tex, (void*)p_xbox_model); fclose(f); }
 	}
 
 
@@ -810,8 +868,20 @@ namespace Nx
 	/******************************************************************/
 	void CEngine::s_plat_set_projection_texture_camera(Nx::CTexture *p_texture, Gfx::Camera *p_camera)
 	{
-		(void)p_texture;
-		(void)p_camera;
+		if( !p_texture || !p_camera ) return;
+		CXboxTexture *p_xbox_tex = static_cast<CXboxTexture*>(p_texture);
+		NxWn32::sTexture *p_engine_tex = p_xbox_tex->GetEngineTexture();
+		if( !p_engine_tex ) return;
+
+		// Camera position is the "eye" of the projection. Look-at is along -Z of camera matrix, one unit away from eye.
+		Mth::Vector cam_pos = p_camera->GetPos();
+		Mth::Matrix cam_mat = p_camera->GetMatrix();
+		Mth::Vector cam_at  = cam_pos + cam_mat[Z] * 1.0f;
+
+		glm::vec3 glm_pos((float)cam_pos[X], (float)cam_pos[Y], (float)cam_pos[Z]);
+		glm::vec3 glm_at ((float)cam_at[X],  (float)cam_at[Y],  (float)cam_at[Z]);
+
+		NxWn32::set_texture_projection_camera(p_engine_tex, glm_pos, glm_at);
 	}
 
 
@@ -822,7 +892,13 @@ namespace Nx
 	/******************************************************************/
 	void CEngine::s_plat_stop_projection_texture(Nx::CTexture *p_texture)
 	{
-		(void)p_texture;
+		if( !p_texture ) return;
+		CXboxTexture *p_xbox_tex = static_cast<CXboxTexture*>(p_texture);
+		NxWn32::sTexture *p_engine_tex = p_xbox_tex->GetEngineTexture();
+		if( p_engine_tex )
+		{
+			NxWn32::destroy_texture_projection_details(p_engine_tex);
+		}
 	}
 
 

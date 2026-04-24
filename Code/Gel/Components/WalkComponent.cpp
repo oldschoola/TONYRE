@@ -187,7 +187,25 @@ void CWalkComponent::RefreshFromStructure( Script::CStruct* pParams )
 void CWalkComponent::Update()
 {
 	uint32 previous_frame_event = m_frame_event;
-	
+
+	// L1+R1 chord: spawn SwitchToSkatingPhysics to remount the board. Mirror
+	// of the dismount chord in CSkaterCorePhysicsComponent::Update(). Guarded
+	// so holding the chord does not re-spawn every frame.
+	if (mp_input_component && mp_physics_control_component)
+	{
+		CControlPad& control_pad = mp_input_component->GetControlPad();
+		if (control_pad.m_L1.GetPressed() && control_pad.m_R1.GetPressed())
+		{
+			control_pad.m_L1.ClearTrigger();
+			control_pad.m_R1.ClearTrigger();
+			if (!mp_physics_control_component->IsSkating())
+			{
+				GetObj()->SpawnScriptPlease(Crc::ConstCRC("SwitchToSkatingPhysics"), nullptr);
+			}
+			return;
+		}
+	}
+
 	// TEMP: debounce R1 after a transition
 	if (m_ignore_grab_button && !mp_input_component->GetControlPad().m_R1.GetPressed())
 	{

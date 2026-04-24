@@ -27,6 +27,8 @@
 
 #include <Gfx/NxNewParticle.h>
 #include "nx/material.h"
+#include "nx/nx_init.h"
+#include "nx/texture.h"
 
 /*****************************************************************************
 **								   Defines									**
@@ -82,6 +84,11 @@ class CXboxNewParticle : public CNewParticle
 	Mth::Vector			m_p0;
 	Mth::Vector			m_p1;
 	Mth::Vector			m_p2;
+
+	// OpenGL resources for rendering billboard quads.
+	GLuint				m_vao = 0;
+	GLuint				m_vbo = 0;
+	NxWn32::sTexture*	mp_texture = nullptr;
 
 protected:
 	void	plat_build( void );

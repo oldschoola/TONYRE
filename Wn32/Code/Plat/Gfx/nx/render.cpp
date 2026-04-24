@@ -13,6 +13,7 @@
 #include "instance.h"
 #include "occlude.h"
 #include "billboard.h"
+#include "texture.h"
 
 //D3DXMATRIX *p_bbox_transform = nullptr;
 //D3DXMATRIX bbox_transform;
@@ -1691,21 +1692,24 @@ void set_render_state( uint32 type, uint32 state )
 /******************************************************************/
 void create_texture_projection_details( sTexture *p_texture, Nx::CXboxModel *p_model, sScene *p_scene )
 {
-	(void)p_texture;
-	(void)p_model;
-	(void)p_scene;
-	/*
+	if( !p_texture ) return;
+	if( !pTextureProjectionDetailsTable )
+	{
+		pTextureProjectionDetailsTable = new Lst::HashTable< sTextureProjectionDetails >( 8 );
+	}
 	sTextureProjectionDetails *p_details = new sTextureProjectionDetails;
 
 	p_details->p_model		= p_model;
 	p_details->p_scene		= p_scene;
 	p_details->p_texture	= p_texture;
-	
-	XGMatrixIdentity( &p_details->view_matrix );
-	XGMatrixIdentity( &p_details->projection_matrix );
-	
-	pTextureProjectionDetailsTable->PutItem((uint32)p_texture, p_details );
-	*/
+	p_details->view_matrix				= glm::mat4(1.0f);
+	p_details->projection_matrix		= glm::mat4(1.0f);
+	p_details->texture_projection_matrix = glm::mat4(1.0f);
+
+	pTextureProjectionDetailsTable->PutItem((uint32)(uintptr_t)p_texture, p_details );
+
+	FILE *f = fopen("shadow_diag.log", "a");
+	if (f) { fprintf(f, "create_texture_projection_details: tex=%p model=%p scene=%p\n", (void*)p_texture, (void*)p_model, (void*)p_scene); fclose(f); }
 }
 
 
@@ -1716,15 +1720,14 @@ void create_texture_projection_details( sTexture *p_texture, Nx::CXboxModel *p_m
 /******************************************************************/
 void destroy_texture_projection_details( sTexture *p_texture )
 {
-	(void)p_texture;
-	/*
-	sTextureProjectionDetails *p_details = pTextureProjectionDetailsTable->GetItem((uint32)p_texture );
+	if( !p_texture ) return;
+	sTextureProjectionDetails *p_details = pTextureProjectionDetailsTable->GetItem((uint32)(uintptr_t)p_texture );
 	if( p_details )
 	{
-		pTextureProjectionDetailsTable->FlushItem((uint32)p_texture );
+		if( p_details->p_scene ) p_details->p_scene->m_flags &= ~SCENE_FLAG_SELF_SHADOWS;
+		pTextureProjectionDetailsTable->FlushItem((uint32)(uintptr_t)p_texture );
 		delete p_details;
 	}
-	*/
 }
 
 
@@ -1733,25 +1736,21 @@ void destroy_texture_projection_details( sTexture *p_texture )
 /*                                                                */
 /*                                                                */
 /******************************************************************/
-/*
-void set_texture_projection_camera( sTexture *p_texture, XGVECTOR3 *p_pos, XGVECTOR3 *p_at )
+void set_texture_projection_camera( sTexture *p_texture, const glm::vec3 &pos, const glm::vec3 &at )
 {
-	sTextureProjectionDetails *p_details = pTextureProjectionDetailsTable->GetItem((uint32)p_texture );
+	sTextureProjectionDetails *p_details = pTextureProjectionDetailsTable->GetItem((uint32)(uintptr_t)p_texture );
 	if( p_details )
 	{
-		// Check for 'straight down' vector.
-		if(( p_pos->x == p_at->x ) && ( p_pos->z == p_at->z ))
+		// Check for 'straight down' vector: need a different up-vector if looking straight down.
+		glm::vec3 up = glm::vec3(0.0f, 1.0f, 0.0f);
+		if( pos.x == at.x && pos.z == at.z )
 		{
-			XGMatrixLookAtRH( &p_details->view_matrix, p_pos, p_at, &XGVECTOR3( 0.0f, 0.0f, 1.0f ));
+			up = glm::vec3(0.0f, 0.0f, 1.0f);
 		}
-		else
-		{
-			XGMatrixLookAtRH( &p_details->view_matrix, p_pos, p_at, &XGVECTOR3( 0.0f, 1.0f, 0.0f ));
-		}
-		XGMatrixOrthoRH( &p_details->projection_matrix, 96.0f, 96.0f, 1.0f, 128.0f );
+		p_details->view_matrix       = glm::lookAtRH(pos, at, up);
+		p_details->projection_matrix = glm::orthoRH_NO(-48.0f, 48.0f, -48.0f, 48.0f, 1.0f, 128.0f);
 	}
 }
-*/
 
 
 /******************************************************************/
@@ -2126,8 +2125,29 @@ static sSortedMeshEntry	sortedMeshArray[1000];
 /*                                                                */
 /*                                                                */
 /******************************************************************/
+// Build matrix: world -> proj camera -> clip -> [0,1] texture space.
+void calculate_tex_proj_matrix( const glm::mat4 &view, const glm::mat4 &proj, glm::mat4 &out_tex_proj, const glm::mat4 *p_world )
+{
+	// Bias matrix maps clip [-1,1] -> [0,1] for x/y/z.
+	glm::mat4 bias(
+		0.5f, 0.0f, 0.0f, 0.0f,
+		0.0f, 0.5f, 0.0f, 0.0f,
+		0.0f, 0.0f, 0.5f, 0.0f,
+		0.5f, 0.5f, 0.5f, 1.0f );
+
+	glm::mat4 vp = proj * view;
+	if( p_world )
+	{
+		out_tex_proj = bias * vp * (*p_world);
+	}
+	else
+	{
+		out_tex_proj = bias * vp;
+	}
+}
+
 /*
-void calculate_tex_proj_matrix( XGMATRIX *p_tex_view_matrix, XGMATRIX *p_tex_proj_matrix, XGMATRIX *p_tex_transform_matrix, XGMATRIX *p_world_matrix )
+void calculate_tex_proj_matrix_legacy( XGMATRIX *p_tex_view_matrix, XGMATRIX *p_tex_proj_matrix, XGMATRIX *p_tex_transform_matrix, XGMATRIX *p_world_matrix )
 {
 	// Get the current view matrix.
 	XGMATRIX matView, matInvView;
@@ -2173,6 +2193,121 @@ void calculate_tex_proj_matrix( XGMATRIX *p_tex_view_matrix, XGMATRIX *p_tex_pro
 /*                                                                */
 /******************************************************************/
 void render_shadow_targets( void )
+{
+	static int s_shadow_diag_frames = 0;
+	bool diag = (s_shadow_diag_frames < 3);
+	if( diag ) s_shadow_diag_frames++;
+
+	if( !pTextureProjectionDetailsTable )
+	{
+		if( diag ) {
+			FILE *f = fopen("shadow_diag.log", "a");
+			if (f) { fprintf(f, "render_shadow_targets: NO TABLE\n"); fclose(f); }
+		}
+		return;
+	}
+
+	// Stash state we are about to trash.
+	glm::mat4 stored_view     = EngineGlobals.view_matrix;
+	glm::mat4 stored_proj     = EngineGlobals.projection_matrix;
+	GLint     stored_viewport[4];
+	glGetIntegerv( GL_VIEWPORT, stored_viewport );
+	GLint     stored_fbo = 0;
+	glGetIntegerv( GL_DRAW_FRAMEBUFFER_BINDING, &stored_fbo );
+
+	// Default: nothing to project this frame. mesh.cpp checks this flag.
+	EngineGlobals.shadow_enabled     = false;
+	EngineGlobals.shadow_texture_id  = 0;
+
+	int entry_count = 0;
+	int drawn_count = 0;
+	pTextureProjectionDetailsTable->IterateStart();
+	sTextureProjectionDetails *p_details = pTextureProjectionDetailsTable->IterateNext();
+
+	while( p_details )
+	{
+		entry_count++;
+		bool has_model = (p_details->p_model != nullptr);
+		bool has_tex   = (p_details->p_texture != nullptr);
+		bool is_rt     = has_tex && p_details->p_texture->IsRenderTarget;
+		bool has_fbo   = has_tex && (p_details->p_texture->GLFramebuffer != 0);
+		if( diag ) {
+			FILE *f = fopen("shadow_diag.log", "a");
+			if (f) { fprintf(f, "render_shadow_targets: entry#%d model=%d tex=%d rt=%d fbo=%d\n", entry_count, has_model, has_tex, is_rt, has_fbo); fclose(f); }
+		}
+		if( p_details->p_model && p_details->p_texture && p_details->p_texture->IsRenderTarget && p_details->p_texture->GLFramebuffer )
+		{
+			drawn_count++;
+			// Bind the projector FBO and clear alpha to 0 so the borders
+			// read as "no shadow". Color is irrelevant (receiver uses .a only).
+			glBindFramebuffer( GL_FRAMEBUFFER, p_details->p_texture->GLFramebuffer );
+			glViewport( 0, 0, p_details->p_texture->BaseWidth, p_details->p_texture->BaseHeight );
+			glClearColor( 1.0f, 1.0f, 1.0f, 0.0f );
+			glClear( GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT );
+
+			// Swap in the shadow projector camera for the caster draw pass.
+			EngineGlobals.view_matrix       = p_details->view_matrix;
+			EngineGlobals.projection_matrix = p_details->projection_matrix;
+			EngineGlobals.rendering_shadow_caster = true;
+
+			int num_geoms = p_details->p_model->GetNumGeoms();
+			int inst_drawn = 0;
+			for( int i = 0; i < num_geoms; ++i )
+			{
+				Nx::CXboxGeom *p_xbox_geom = static_cast<Nx::CXboxGeom*>( p_details->p_model->GetGeomByIndex(i) );
+				if( !p_xbox_geom ) continue;
+				CInstance *p_instance = p_xbox_geom->GetInstance();
+				if( !p_instance || !p_instance->GetActive() ) continue;
+
+				p_instance->GetScene()->m_flags |= SCENE_FLAG_RENDERING_SHADOW;
+				render_instance( p_instance, vRENDER_NO_CULLING );
+				p_instance->GetScene()->m_flags &= ~SCENE_FLAG_RENDERING_SHADOW;
+				p_instance->GetScene()->m_flags |= SCENE_FLAG_SELF_SHADOWS;
+				inst_drawn++;
+			}
+			if( diag ) {
+				FILE *f = fopen("shadow_diag.log", "a");
+				if (f) { fprintf(f, "  casters: num_geoms=%d drawn=%d\n", num_geoms, inst_drawn); fclose(f); }
+			}
+
+			EngineGlobals.rendering_shadow_caster = false;
+
+			// Compute receiver-side texture projection matrix (bias * proj * view).
+			calculate_tex_proj_matrix( p_details->view_matrix, p_details->projection_matrix, p_details->texture_projection_matrix );
+
+			// Publish the last valid projector state for mesh.cpp to use.
+			// With a single skater shadow there is exactly one entry in the table;
+			// if more projectors get added later, the last one wins — acceptable for now.
+			EngineGlobals.shadow_texture_id      = p_details->p_texture->GLTexture;
+			EngineGlobals.shadow_tex_proj_matrix = p_details->texture_projection_matrix;
+			EngineGlobals.shadow_enabled         = true;
+
+			// Origin used for distance fade: skater world position lives in column 3 of the
+			// projector's inverse view, but passing it through is expensive and we do not have
+			// the caller's transform here. Approximate with the eye position from the view:
+			// view_matrix * inv == I, so origin ≈ -view[3].xyz transformed by transpose.
+			glm::mat4 inv_view = glm::inverse( p_details->view_matrix );
+			EngineGlobals.shadow_origin = glm::vec3( inv_view[3] );
+		}
+		p_details = pTextureProjectionDetailsTable->IterateNext();
+	}
+
+	if( diag ) {
+		FILE *f = fopen("shadow_diag.log", "a");
+		if (f) { fprintf(f, "render_shadow_targets: entries=%d drawn=%d enabled=%d tex_id=%u origin=(%.1f,%.1f,%.1f)\n",
+			entry_count, drawn_count, (int)EngineGlobals.shadow_enabled, (unsigned)EngineGlobals.shadow_texture_id,
+			EngineGlobals.shadow_origin.x, EngineGlobals.shadow_origin.y, EngineGlobals.shadow_origin.z); fclose(f); }
+	}
+
+	// Restore state.
+	glBindFramebuffer( GL_FRAMEBUFFER, (GLuint)stored_fbo );
+	glViewport( stored_viewport[0], stored_viewport[1], stored_viewport[2], stored_viewport[3] );
+	EngineGlobals.view_matrix       = stored_view;
+	EngineGlobals.projection_matrix = stored_proj;
+	glClearColor( 0.0f, 0.0f, 0.0f, 0.0f );
+}
+
+static void render_shadow_targets_legacy( void )
 {
 	/*
 	XGMATRIX	stored_view_matrix			= EngineGlobals.view_matrix;

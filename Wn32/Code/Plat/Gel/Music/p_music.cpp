@@ -206,8 +206,21 @@ namespace Pcm
 			if (i.is_regular_file())
 			{
 				std::string name = i.path().stem().string();
+				auto rel = std::filesystem::relative(i.path(), File::DataPath());
 				uint32 checksum = Crc::GenerateCRCFromString(name.c_str());
-				paths[checksum] = std::filesystem::relative(i.path(), File::DataPath());
+				paths[checksum] = rel;
+
+				// Also index by raw hex stem. PC Bink audio is stored with
+				// filenames that are already the CRC32 of the real stream
+				// name (the original name is lost), so accept 8-char hex
+				// stems directly as their checksum.
+				if (name.size() == 8 && std::all_of(name.begin(), name.end(),
+					[](char c) { return std::isxdigit((unsigned char)c); }))
+				{
+					uint32 hex = (uint32)std::stoul(name, nullptr, 16);
+					if (paths.find(hex) == paths.end())
+						paths[hex] = rel;
+				}
 			}
 		}
 		return paths;

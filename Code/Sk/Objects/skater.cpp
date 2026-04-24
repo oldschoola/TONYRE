@@ -1392,6 +1392,9 @@ void CSkater::Construct ( Obj::CSkaterProfile* pSkaterProfile)
 	Dbg_MsgAssert( !GetShadowComponent(), ( "Shadow component already exists" ) );
 	Script::CStruct* pShadowStruct = new Script::CStruct;
 	pShadowStruct->AddChecksum( Crc::ConstCRC("component"), CRC_SHADOW );
+    // TODO (Wn32): "detailed" shadow (projected render-target texture) is only partially ported.
+    // Keeps compiling/runs but produces no visible shadow. Use "simple" blob for visibility
+    // until render_shadow_targets_gl + ShadowProjectionShader are implemented.
     pShadowStruct->AddChecksum( Crc::ConstCRC("shadowType"), (Crc::ConstCRC("detailed")) );
 	CreateComponentFromStructure(pShadowStruct, nullptr);
     delete pShadowStruct;

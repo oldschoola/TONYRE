@@ -9,6 +9,8 @@
 #include <Sys/File/filesys.h>
 #include <Sys/timer.h>
 
+#include <Gfx/NxLightMan.h>
+
 #include "nx_init.h"
 #include "mesh.h"
 #include "scene.h"
@@ -329,6 +331,56 @@ void setup_weighted_mesh_vertex_shader( void *p_root_matrix, void *p_bone_matric
 
 	// Send matrices
 	glUniformMatrix4fv(glGetUniformLocation(shader->program, "u_bone[0]"), num_bone_matrices, GL_FALSE, (GLfloat*)p_bone_matrices);
+
+	// Mirror the bone matrices into the shadow caster shader so the skater silhouette
+	// pass has the same skinning available when rendering into the shadow FBO.
+	{
+		sShader *caster = ShadowCasterShader();
+		glUseProgram(caster->program);
+		glUniformMatrix4fv(glGetUniformLocation(caster->program, "u_bone[0]"), num_bone_matrices, GL_FALSE, (GLfloat*)p_bone_matrices);
+		glUseProgram(shader->program);
+	}
+
+	// Upload scene lights so the boned vertex shader's light_col calculation
+	// sees real values. Scaling follows the Xbox-era convention (rgba/128):
+	// 0x80 == unity, above that == overbright. s_ambient_brightness /
+	// s_diffuse_brightness are the per-tick brightness factors the level
+	// drives via SetAmbientLightModulationFactor etc. — must be applied here
+	// or NPCs never respond to level brightness changes.
+	//
+	// Direction is stored "from light" in world space; shader needs
+	// "to light" for a plain N·L dot, so negate here (matches the original
+	// Xbox path that wrote -dir[...] into EngineGlobals).
+	{
+		const float amb_brightness = Nx::CLightManager::sGetAmbientBrightness();
+		const float amb_scale = amb_brightness * (1.0f / 128.0f);
+		Image::RGBA amb = Nx::CLightManager::sGetLightAmbientColor();
+		float amb_rgb[3] = {
+			amb.r * amb_scale,
+			amb.g * amb_scale,
+			amb.b * amb_scale,
+		};
+		glUniform3fv(glGetUniformLocation(shader->program, "u_light_amb"), 1, amb_rgb);
+
+		float light_col[3 * 3] = { 0 };
+		float light_dir[3 * 4] = { 0 };
+		for (int i = 0; i < Nx::CLightManager::MAX_LIGHTS; ++i)
+		{
+			const float dif_scale = Nx::CLightManager::sGetDiffuseBrightness(i) * (1.0f / 128.0f);
+			Image::RGBA dif = Nx::CLightManager::sGetLightDiffuseColor(i);
+			light_col[i * 3 + 0] = dif.r * dif_scale;
+			light_col[i * 3 + 1] = dif.g * dif_scale;
+			light_col[i * 3 + 2] = dif.b * dif_scale;
+
+			Mth::Vector dir = Nx::CLightManager::sGetLightDirection(i);
+			light_dir[i * 4 + 0] = -dir[X];
+			light_dir[i * 4 + 1] = -dir[Y];
+			light_dir[i * 4 + 2] = -dir[Z];
+			light_dir[i * 4 + 3] = 0.0f; // min N·L floor; 0 = pure lambert
+		}
+		glUniform3fv(glGetUniformLocation(shader->program, "u_light_col"), 3, light_col);
+		glUniform4fv(glGetUniformLocation(shader->program, "u_light_dir"), 3, light_dir);
+	}
 }
 
 

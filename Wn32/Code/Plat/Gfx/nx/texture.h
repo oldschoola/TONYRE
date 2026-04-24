@@ -46,6 +46,11 @@ struct sTexture
 
 	GLuint GLTexture = 0;
 	uint8 *Data = nullptr;
+
+	// Render-target support (for detailed shadow projection).
+	GLuint GLFramebuffer = 0;
+	GLuint GLDepthRenderbuffer = 0;
+	bool   IsRenderTarget = false;
 };
 
 sTexture *LoadTexture( const char *p_filename );

@@ -120,17 +120,33 @@ add_library(TonyRE.Wn32 STATIC
 	"Code/Plat/Sys/SIO/p_siodev.cpp"
 	"Code/Plat/Sys/SIO/p_sioman.cpp"
 
+	"Code/Plat/Sys/SIO/DualSense/FHIDDeviceInfo.h"
+	"Code/Plat/Sys/SIO/DualSense/FHIDDeviceInfo.cpp"
+	"Code/Plat/Sys/SIO/DualSense/TonyRegistryPolicy.h"
+	"Code/Plat/Sys/SIO/DualSense/DualSense_Pump.h"
+	"Code/Plat/Sys/SIO/DualSense/DualSense_Pump.cpp"
+
 	"Code/Plat/Sys/p_timer.cpp"
 )
 target_link_libraries(TonyRE.Wn32 PUBLIC TonyRE.Code TonyRE.Common)
 target_include_directories(TonyRE.Wn32 PUBLIC "Code")
 
+# GamepadCore (DualSense / DualShock 4) sibling checkout.
+# Expected at ../Dualsense-Multiplatform relative to the TONYRE repo root.
+set(GAMEPAD_CORE_DIR "${CMAKE_SOURCE_DIR}/../Dualsense-Multiplatform" CACHE PATH "Path to Dualsense-Multiplatform checkout")
+if(EXISTS "${GAMEPAD_CORE_DIR}/CMakeLists.txt" AND NOT TARGET GamepadCore)
+	add_subdirectory("${GAMEPAD_CORE_DIR}" GamepadCore)
+endif()
+if(TARGET GamepadCore)
+	target_link_libraries(TonyRE.Wn32 PUBLIC GamepadCore)
+endif()
+
 if(WIN32)
 	# Set platform defines
 	target_compile_definitions(TonyRE.Wn32 PUBLIC __PLAT_WN32__)
 
-	# Link libraries
-	target_link_libraries(TonyRE.Wn32 PUBLIC Ws2_32 SDL2-static glad glm)
+	# Link libraries (hid + setupapi for DualSense HID)
+	target_link_libraries(TonyRE.Wn32 PUBLIC Ws2_32 SDL2-static glad glm hid setupapi)
 endif()
 
 if (UNIX)

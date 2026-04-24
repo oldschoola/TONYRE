@@ -19,4 +19,6 @@ namespace NxWn32
 	sShader *SpriteShader();
 	sShader *BasicShader();
 	sShader *BonedShader();
+	sShader *ParticleShader();
+	sShader *ShadowCasterShader();
 } // namespace NxWn32
