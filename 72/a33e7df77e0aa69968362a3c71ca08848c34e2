@@ -1,0 +1,33 @@
+tools/convert_music.py
+  89b55e393041d309 1-90
+tools/crc_scan.py
+  89b55e393041d309 1-43
+tools/extract_pcm_wad.py
+  89b55e393041d309 1-74
+tools/convert_cutscene_voices.py
+  89b55e393041d309 1-64
+tools/voice_crc_check.py
+  89b55e393041d309 1-43
+tools/crc_probe.py
+  89b55e393041d309 1-37
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "72a33e7df77e0aa69968362a3c71ca08848c34e2",
+  "prompts": {
+    "89b55e393041d309": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8401e31a-e50e-477d-970b-04e60f7cbcea",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "oldschoola",
+      "messages": [],
+      "total_additions": 351,
+      "total_deletions": 0,
+      "accepted_lines": 36329,
+      "overriden_lines": 0
+    }
+  }
+}
