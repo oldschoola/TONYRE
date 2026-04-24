@@ -1,0 +1,125 @@
+Code/Gel/Components/shadowcomponent.cpp
+  89b55e393041d309 134-142
+Wn32/Code/Plat/Gfx/nx/nx_init.h
+  89b55e393041d309 139-149
+Wn32/Code/Plat/Sys/SIO/p_siodev.cpp
+  b4ed876a8f663474 28,31,41-44,98-100,157-178,628-650,692,696-699,722-724,739-746,761-762,764,766-768,782-786,828-868
+Code/Sk/Objects/skater.cpp
+  89b55e393041d309 1395-1397
+Wn32/Code/Plat/Sys/SIO/DualSense/TonyRegistryPolicy.h
+  b4ed876a8f663474 1-91
+Wn32/Code/Plat/Gfx/nx/anim.cpp
+  b4ed876a8f663474 12-13,334,344-345,354,357-358,362-368,370,374-375,379-383
+  89b55e393041d309 335-343,346-353,355-356,359-361,369,371-373,376-378
+Wn32/Code/Plat/Sys/SIO/DualSense/FHIDDeviceInfo.cpp
+  b4ed876a8f663474 1-443
+Code/Gfx/shadow.cpp
+  89b55e393041d309 168,171,173,175-184,209-240,242
+Wn32/Code/Plat/Gfx/nx/material.h
+  89b55e393041d309 31
+Wn32/Code/Plat/Gfx/nx/texture.h
+  89b55e393041d309 49-53
+Wn32/Code/Plat/Gel/Music/p_music.cpp
+  437f0f8883d8725a 209,211-223
+Code/Gfx/NxModel.h
+  89b55e393041d309 122
+Wn32/Code/Plat/Gfx/p_NxGeom.cpp
+  89b55e393041d309 503-534
+Code/Gfx/NxGeom.cpp
+  89b55e393041d309 965-984
+Code/Gel/Components/WalkComponent.cpp
+  b4ed876a8f663474 190-208
+Wn32/Code/Plat/Gfx/nx/texture.cpp
+  89b55e393041d309 45-54,80-101,103,105,107,109-120,122-124,126-129
+Wn32/Code/Plat/Gfx/nx/render.cpp
+  89b55e393041d309 16,1695-1699,1705-1712,1723-1724,1727-1728,1739,1741,1744-1746,1748,1750-1751,2128-2148,2150,2196-2310
+Wn32/Code/Plat/Sys/SIO/DualSense/DualSense_Pump.cpp
+  b4ed876a8f663474 1-306
+Code/Gfx/NxModel.cpp
+  89b55e393041d309 1510-1524
+Code/Sk/Main.cpp
+  89b55e393041d309 177-219,228-229
+Wn32/Code/Plat/Gfx/nx/mesh.cpp
+  89b55e393041d309 601-643,761-785,933-960,967-971,1733-1734,1740,1745-1772
+Wn32/Code/Plat/Sys/SIO/p_sioman.cpp
+  b4ed876a8f663474 33,39-40,87-90,134-137,240-241,257-258
+Code/Gfx/NxGeom.h
+  89b55e393041d309 104,193
+Wn32/Code/Plat/Sys/SIO/DualSense/FHIDDeviceInfo.h
+  b4ed876a8f663474 1-36
+Wn32/Code/Plat/Gfx/p_nxnewparticle.h
+  89b55e393041d309 30-31,88-92
+Wn32/CMakeLists.txt
+  b4ed876a8f663474 123-128,134-143,148-149
+Wn32/Code/Plat/Gfx/p_nx.cpp
+  89b55e393041d309 21-22,165-170,296-312,315,319-320,813-821,832-860,871-884,895-901
+Wn32/Code/Plat/Gfx/nx/shader.cpp
+  89b55e393041d309 87,124-125,130,138,142-143,180-181,186,216-218,221-225,256-259,266-267,272,277-280,314-320,383-401,500-582
+  b4ed876a8f663474 144,281
+Wn32/Code/Plat/Sys/SIO/DualSense/DualSense_Pump.h
+  b4ed876a8f663474 1-56
+Code/Gfx/NxLightMan.h
+  89b55e393041d309 132-135
+Wn32/Code/Plat/Gfx/p_nxnewparticle.cpp
+  89b55e393041d309 28-30,131-138,143,167,173,208-214,216-221,223,226-227,229-230,232-233,235-237,239,241-245,247-249,251-252,255-256,258-262,266-270,273,275-279,282-301,304-306,309-313,315,317-319,321-322,324-326,328-330,332-335,337,339,341-350,352-353,358,376,381,386-390,429,434-436,438-443,446,449,458,463,470,474-476,478,483-507,521,524,526-527,529-536
+Wn32/Code/Plat/Gfx/nx/instance.cpp
+  89b55e393041d309 12-13,142,145-158,163,166,168-171,176,180-181,185,189,193-205,211-219,252,262,264-274,478-499,551-554
+Wn32/Code/Plat/Gfx/nx/render.h
+  89b55e393041d309 39-41,100-101
+Code/Sk/Components/SkaterCorePhysicsComponent.cpp
+  b4ed876a8f663474 183,185-204
+Code/Sys/siodev.h
+  b4ed876a8f663474 30-31,126,130,142-143,152-171,199,201-206
+Wn32/Code/Plat/Gfx/p_NxLightMan.cpp
+  b4ed876a8f663474 83,113,144
+Wn32/Code/Plat/Gfx/nx/shader.h
+  89b55e393041d309 22-23
+Wn32/Code/Plat/Gfx/p_NxGeom.h
+  89b55e393041d309 75
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "f344bd7e6ab33a321a7501e3e30a5b3d506be734",
+  "prompts": {
+    "437f0f8883d8725a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c6cf7159-fb9e-4c9f-9fc4-c92a597268c6",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "oldschoola",
+      "messages": [],
+      "total_additions": 1151027,
+      "total_deletions": 35,
+      "accepted_lines": 1154237,
+      "overriden_lines": 0
+    },
+    "89b55e393041d309": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8401e31a-e50e-477d-970b-04e60f7cbcea",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "oldschoola",
+      "messages": [],
+      "total_additions": 76161,
+      "total_deletions": 20823,
+      "accepted_lines": 54116,
+      "overriden_lines": 29
+    },
+    "b4ed876a8f663474": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "da3aa767-0651-40f0-99c2-9af9b0f714f1",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "oldschoola",
+      "messages": [],
+      "total_additions": 1271,
+      "total_deletions": 175,
+      "accepted_lines": 15403,
+      "overriden_lines": 0
+    }
+  }
+}
