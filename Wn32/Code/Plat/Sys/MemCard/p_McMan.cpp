@@ -27,6 +27,16 @@
 
 #include <Sys/McMan.h>
 
+#include <cstdio>
+#include <cstring>
+#include <cstdlib>
+#include <ctime>
+#include <cerrno>
+#include <sys/stat.h>
+#include <direct.h>
+#include <io.h>
+#include <windows.h>
+
 /*****************************************************************************
 **								DBG Information								**
 *****************************************************************************/
@@ -43,6 +53,84 @@ namespace Mc
 *****************************************************************************/
 
 #define MAX_FILENAME_LENGTH	128
+
+// Save root relative to CWD (game runs from Game/ dir).
+static const char *SAVE_ROOT = "Save";
+
+namespace
+{
+
+// Ensure the save-root directory exists; idempotent. Safe to call repeatedly.
+void EnsureSaveRoot()
+{
+	CreateDirectoryA( SAVE_ROOT, nullptr );
+}
+
+// Strip a leading slash/backslash, swap forward slashes for backslashes, and
+// prepend SAVE_ROOT. Writes into the caller-supplied buffer.
+void BuildFullPath( const char *rel, char *out, size_t out_size )
+{
+	const char *src = rel ? rel : "";
+	while ( *src == '/' || *src == '\\' )
+		++src;
+
+	_snprintf_s( out, out_size, _TRUNCATE, "%s\\%s", SAVE_ROOT, src );
+
+	for ( char *p = out; *p; ++p )
+	{
+		if ( *p == '/' )
+			*p = '\\';
+	}
+}
+
+// Recursively remove dir + contents. Returns true on success or if dir absent.
+bool RemoveTree( const char *full_path )
+{
+	char pattern[MAX_FILENAME_LENGTH];
+	_snprintf_s( pattern, _TRUNCATE, "%s\\*", full_path );
+
+	WIN32_FIND_DATAA fd;
+	HANDLE h = FindFirstFileA( pattern, &fd );
+	if ( h != INVALID_HANDLE_VALUE )
+	{
+		do
+		{
+			if ( strcmp( fd.cFileName, "." ) == 0 || strcmp( fd.cFileName, ".." ) == 0 )
+				continue;
+
+			char child[MAX_FILENAME_LENGTH];
+			_snprintf_s( child, _TRUNCATE, "%s\\%s", full_path, fd.cFileName );
+
+			if ( fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY )
+				RemoveTree( child );
+			else
+				DeleteFileA( child );
+		}
+		while ( FindNextFileA( h, &fd ) );
+		FindClose( h );
+	}
+
+	BOOL rv = RemoveDirectoryA( full_path );
+	return rv || GetLastError() == ERROR_FILE_NOT_FOUND || GetLastError() == ERROR_PATH_NOT_FOUND;
+}
+
+// Fill a Mc::DateTime from a FILETIME (UTC).
+void FillDateTime( DateTime &dt, const FILETIME &ft )
+{
+	FILETIME local_time;
+	SYSTEMTIME sys_time;
+	FileTimeToLocalFileTime( &ft, &local_time );
+	FileTimeToSystemTime( &local_time, &sys_time );
+
+	dt.m_Year    = sys_time.wYear;
+	dt.m_Month   = (unsigned char)sys_time.wMonth;
+	dt.m_Day     = (unsigned char)sys_time.wDay;
+	dt.m_Hour    = (unsigned char)sys_time.wHour;
+	dt.m_Minutes = (unsigned char)sys_time.wMinute;
+	dt.m_Seconds = (unsigned char)sys_time.wSecond;
+}
+
+}
 
 /*****************************************************************************
 **								Private Types								**
@@ -70,20 +158,23 @@ DefineSingletonClass( Manager, "MemCard Manager" );
 
 Manager::Manager( void )
 {
-	/*
-	int i, j;
-
-	for( i = 0; i < vMAX_PORT; i++ )
+	for ( int i = 0; i < vMAX_PORT; ++i )
 	{
-		for( j = 0; j < vMAX_SLOT; j++ )
+		for ( int j = 0; j < vMAX_SLOT; ++j )
 		{
 			m_card[i][j].m_port = i;
 			m_card[i][j].m_slot = j;
+			m_card[i][j].m_last_error = 0;
+			m_card[i][j].m_mounted_drive_letter = 0;
 		}
 	}
-	
+
+	m_hard_drive.m_port = 0;
+	m_hard_drive.m_slot = 0;
+	m_hard_drive.m_last_error = 0;
 	m_hard_drive.SetAsHardDrive();
-	*/
+
+	EnsureSaveRoot();
 }
 
 /******************************************************************/
@@ -354,30 +445,29 @@ bool Card::MaxFilesReached()
 // Note: dir_name must no longer start with a backslash, it should just be "Career2-Career" etc.
 bool Card::MakeDirectory( const char* dir_name )
 {
-	(void)dir_name;
-	/*
-	char	output_dir[vDIRECTORY_NAME_BUF_SIZE];
-	WCHAR	input_name[vDIRECTORY_NAME_BUF_SIZE];
-
-	wsprintfW( input_name, L"%hs", dir_name );
-	DWORD rv = XCreateSaveGame(	"u:\\",				// Root of device on which to create the save game.
-								input_name,			// Name of save game (effectively directory name).
-								OPEN_ALWAYS,		// Open disposition.
-								0,					// Creation flags.
-								output_dir,			// String to take resultant directory name buffer.
-								vDIRECTORY_NAME_BUF_SIZE );	// Size of directory name buffer.
-
-	if( rv == ERROR_SUCCESS )
+	if ( dir_name == nullptr || *dir_name == 0 )
 	{
+		m_last_error = vINVALID_PATH;
+		return false;
+	}
+
+	EnsureSaveRoot();
+
+	char full_path[MAX_FILENAME_LENGTH];
+	BuildFullPath( dir_name, full_path, sizeof(full_path) );
+
+	if ( CreateDirectoryA( full_path, nullptr ) )
 		return true;
-	}
 
-	if (rv==ERROR_DISK_FULL)
-	{
-		m_last_error=vINSUFFICIENT_SPACE;
-	}
-		*/
-	m_last_error = vACCESS_ERROR;
+	DWORD err = GetLastError();
+	if ( err == ERROR_ALREADY_EXISTS )
+		return true;
+
+	if ( err == ERROR_DISK_FULL )
+		m_last_error = vINSUFFICIENT_SPACE;
+	else
+		m_last_error = vACCESS_ERROR;
+
 	return false;
 }
 
@@ -387,30 +477,29 @@ bool Card::MakeDirectory( const char* dir_name )
 /******************************************************************/
 const char *Card::ConvertDirectory( const char* dir_name )
 {
-	(void)dir_name;
-	/*
-	static char	output_dir[vDIRECTORY_NAME_BUF_SIZE];
-	WCHAR	input_name[vDIRECTORY_NAME_BUF_SIZE];
+	// Xbox used to mangle the save-game dir name via XCreateSaveGame. On Win32
+	// we just write through to Save/<dir_name>, so the "low-level" name is the
+	// same as the incoming logical name — but only if the directory actually
+	// exists (callers expect nullptr when the dir has not been created yet).
+	if ( dir_name == nullptr || *dir_name == 0 )
+		return nullptr;
 
-	wsprintfW( input_name, L"%hs", dir_name );
-	DWORD rv = XCreateSaveGame(	"u:\\",				// Root of device on which to create the save game.
-								input_name,			// Name of save game (effectively directory name).
-								OPEN_EXISTING,		// Open disposition.
-								0,					// Creation flags.
-								output_dir,			// String to take resultant directory name buffer.
-								vDIRECTORY_NAME_BUF_SIZE );	// Size of directory name buffer.
+	static char output_dir[vDIRECTORY_NAME_BUF_SIZE];
 
-	if( rv == ERROR_SUCCESS )
-	{
-		// Remove the initial "u:\" and the final "\"
-		strcpy(output_dir,output_dir+3);
-		output_dir[strlen(output_dir)-1]=0;
-		
-		return output_dir;
-	}
-	*/
-	return nullptr;
-}	
+	char full_path[MAX_FILENAME_LENGTH];
+	BuildFullPath( dir_name, full_path, sizeof(full_path) );
+
+	DWORD attr = GetFileAttributesA( full_path );
+	if ( attr == INVALID_FILE_ATTRIBUTES || !( attr & FILE_ATTRIBUTE_DIRECTORY ) )
+		return nullptr;
+
+	const char *src = dir_name;
+	while ( *src == '/' || *src == '\\' )
+		++src;
+	strncpy( output_dir, src, vDIRECTORY_NAME_BUF_SIZE - 1 );
+	output_dir[vDIRECTORY_NAME_BUF_SIZE - 1] = 0;
+	return output_dir;
+}
 
 // Skate3 code, disabled for now.
 #if 0
@@ -522,18 +611,12 @@ bool Card::DeleteDirectory( const char* dir_name )
 // The name must not be preceded with a backslash, ie should be "Career12-Career" for example.
 bool Card::DeleteDirectory( const char* dir_name )
 {
-	(void)dir_name;
-	/*
-	WCHAR	input_name[64];
-	wsprintfW( input_name, L"%hs", dir_name );
-	DWORD rv = XDeleteSaveGame(	"u:\\", input_name );
+	if ( dir_name == nullptr || *dir_name == 0 )
+		return false;
 
-	if( rv == ERROR_SUCCESS )
-	{
-		return true;
-	}
-	*/
-	return false;
+	char full_path[MAX_FILENAME_LENGTH];
+	BuildFullPath( dir_name, full_path, sizeof(full_path) );
+	return RemoveTree( full_path );
 }
 
 /******************************************************************/
@@ -666,29 +749,20 @@ bool Card::MountFailedDueToCardUnformatted()
 /******************************************************************/
 int	Card::GetNumFreeClusters( void )
 {
-	/*
-	if( m_mounted_drive_letter )
-	{
-		char p_drive[20];
-		strcpy(p_drive,"z:\\");
-		
-		ULARGE_INTEGER	uliFreeAvail;
-		ULARGE_INTEGER	uliTotal;
+	EnsureSaveRoot();
 
-		p_drive[0] = m_mounted_drive_letter;
-		BOOL br		= GetDiskFreeSpaceEx( p_drive, &uliFreeAvail, &uliTotal, nullptr );
-		if( br )
-		{
-			// Each increment of HighPart represents 2^32 bytes, which is (2^32)/16384=262144 blocks.
-			return uliFreeAvail.HighPart*262144 + uliFreeAvail.LowPart/16384;
-		}
-		else
-		{
-			return 0;
-		}
-	}
-	*/
-	return 0;
+	ULARGE_INTEGER uli_free_avail;
+	ULARGE_INTEGER uli_total;
+	if ( !GetDiskFreeSpaceExA( SAVE_ROOT, &uli_free_avail, &uli_total, nullptr ) )
+		return 0;
+
+	// Report blocks as 16 KB chunks, matching the PS2/Xbox block model callers
+	// expect. Cap at INT_MAX so the int return cannot wrap on modern drives.
+	const ULONGLONG block_bytes = 16384ULL;
+	ULONGLONG blocks = uli_free_avail.QuadPart / block_bytes;
+	if ( blocks > (ULONGLONG)0x7FFFFFFF )
+		blocks = 0x7FFFFFFF;
+	return (int)blocks;
 }
 
 
@@ -700,7 +774,9 @@ int	Card::GetNumFreeClusters( void )
 int	Card::GetNumFreeEntries( const char* path )
 {
 	(void)path;
-	return 0;
+	// No per-directory quota on a real filesystem. Report a large value so
+	// callers that gate saves on "entries left" do not reject writes.
+	return 0x7FFFFFFF;
 }
 
 
@@ -711,8 +787,20 @@ int	Card::GetNumFreeEntries( const char* path )
 /******************************************************************/
 bool Card::Delete( const char* filename )
 {
-	(void)filename;
-	return true;
+	if ( filename == nullptr || *filename == 0 )
+		return false;
+
+	char full_path[MAX_FILENAME_LENGTH];
+	BuildFullPath( filename, full_path, sizeof(full_path) );
+
+	DWORD attr = GetFileAttributesA( full_path );
+	if ( attr == INVALID_FILE_ATTRIBUTES )
+		return true;	// nothing to do
+
+	if ( attr & FILE_ATTRIBUTE_DIRECTORY )
+		return RemoveTree( full_path );
+
+	return DeleteFileA( full_path ) != 0;
 }
 
 
@@ -723,9 +811,15 @@ bool Card::Delete( const char* filename )
 /******************************************************************/
 bool Card::Rename( const char* old_name, const char* new_name )
 {
-	(void)old_name;
-	(void)new_name;
-	return true;
+	if ( old_name == nullptr || new_name == nullptr )
+		return false;
+
+	char old_full[MAX_FILENAME_LENGTH];
+	char new_full[MAX_FILENAME_LENGTH];
+	BuildFullPath( old_name, old_full, sizeof(old_full) );
+	BuildFullPath( new_name, new_full, sizeof(new_full) );
+
+	return MoveFileExA( old_full, new_full, MOVEFILE_REPLACE_EXISTING ) != 0;
 }
 
 
@@ -736,117 +830,78 @@ bool Card::Rename( const char* old_name, const char* new_name )
 /******************************************************************/
 File* Card::Open( const char* filename, int mode, size_t size )
 {
-	(void)filename;
-	(void)mode;
 	(void)size;
 
-	/*
-	(void)filename;
-	(void)mode;
-	(void)size;
-
-	Dbg_Assert( m_mounted_drive_letter != 0 );
-
-	m_last_error=0;
-	
-	File*	p_file		= nullptr;
-	HANDLE	handle;
-
-	// Seems incoming filenames are of the form /foo/bar etc.
-	cardFilenameBuffer[0] = m_mounted_drive_letter;
-	cardFilenameBuffer[1] = ':';
-
-	int index = 2;
-	while ((cardFilenameBuffer[index] = *filename) != '\0')
+	if ( filename == nullptr || *filename == 0 )
 	{
-		// Switch forward slash directory separators to the supported backslash.
-		if( cardFilenameBuffer[index] == '/' )
-		{
-			cardFilenameBuffer[index] = '\\';
-		}
-		++index;
-		++filename;
+		m_last_error = vINVALID_PATH;
+		return nullptr;
 	}
 
-	DWORD dwDesiredAccess;
-	DWORD dwCreationDisposition;
+	m_last_error = 0;
+	EnsureSaveRoot();
 
-	switch( mode )
+	char full_path[MAX_FILENAME_LENGTH];
+	BuildFullPath( filename, full_path, sizeof(full_path) );
+
+	const char *stdio_mode = nullptr;
+	switch ( mode )
 	{
 		case File::mMODE_READ:
-		{
-			dwDesiredAccess			= GENERIC_READ;
-			dwCreationDisposition	= OPEN_EXISTING;
+			stdio_mode = "rb";
 			break;
-		}
-
 		case File::mMODE_WRITE:
-		{
-			dwDesiredAccess			= GENERIC_WRITE;
-			dwCreationDisposition	= OPEN_EXISTING;
+			stdio_mode = "rb+";
 			break;
-		}
-
 		case ( File::mMODE_WRITE | File::mMODE_CREATE ):
-		{
-			dwDesiredAccess			= GENERIC_WRITE;
-			dwCreationDisposition	= OPEN_ALWAYS;
+			stdio_mode = "wb";
 			break;
-		}
-
 		case File::mMODE_CREATE:
-		{
-			dwDesiredAccess			= GENERIC_WRITE;
-			dwCreationDisposition	= CREATE_NEW;
+			stdio_mode = "wbx";	// fail if exists, matches CREATE_NEW
 			break;
-		}
-
 		case ( File::mMODE_READ | File::mMODE_WRITE ):
-		{
-			dwDesiredAccess	= GENERIC_READ | GENERIC_WRITE;
-			dwCreationDisposition	= OPEN_EXISTING;
+			stdio_mode = "rb+";
 			break;
-		}
-
 		default:
-		{
-			Dbg_Assert( 0 );
+			m_last_error = vACCESS_ERROR;
 			return nullptr;
-		}
 	}
 
-	handle = CreateFile(	cardFilenameBuffer,							// file name
-							dwDesiredAccess,							// access mode
-							0,											// share mode
-							nullptr,										// security attributes
-							dwCreationDisposition,						// how to create
-							FILE_ATTRIBUTE_NORMAL,						// file attributes and flags
-							nullptr );				                        // handle to template file
-
-	if( handle != INVALID_HANDLE_VALUE )
+	FILE *fp = nullptr;
+	if ( fopen_s( &fp, full_path, stdio_mode ) != 0 || fp == nullptr )
 	{
-		p_file = new File( (int)handle, this );
-		
-		WIN32_FILE_ATTRIBUTE_DATA file_attribute_data;
-		if (GetFileAttributesEx(cardFilenameBuffer,GetFileExInfoStandard,&file_attribute_data))
-		{
-//			Skate3 code, disabled for now.
-#			if 0
-			p_file->m_file_time=file_attribute_data.ftLastWriteTime;
-#			endif
-		}	
-		
-		return p_file;
+		if ( errno == ENOSPC )
+			m_last_error = vINSUFFICIENT_SPACE;
+		else
+			m_last_error = vACCESS_ERROR;
+		return nullptr;
+	}
+
+	File *p_file = new File( reinterpret_cast<intptr_t>( fp ), this );
+
+	// Copy the logical filename (strip a leading slash) so callers that scan
+	// the Card's file list later can match against the name they opened.
+	const char *src = filename;
+	while ( *src == '/' || *src == '\\' )
+		++src;
+	strncpy( p_file->m_Filename, src, File::vMAX_FILENAME_LEN );
+	p_file->m_Filename[File::vMAX_FILENAME_LEN] = 0;
+
+	WIN32_FILE_ATTRIBUTE_DATA attr_data;
+	if ( GetFileAttributesExA( full_path, GetFileExInfoStandard, &attr_data ) )
+	{
+		FillDateTime( p_file->m_Created, attr_data.ftCreationTime );
+		FillDateTime( p_file->m_Modified, attr_data.ftLastWriteTime );
+		p_file->m_Size = attr_data.nFileSizeLow;
+		p_file->m_Attribs = File::mATTRIB_READABLE | File::mATTRIB_WRITEABLE;
 	}
 	else
 	{
-		if (GetLastError()==ERROR_DISK_FULL)
-		{
-			m_last_error=vINSUFFICIENT_SPACE;
-		}
-	}	
-	*/
-	return nullptr;
+		p_file->m_Size = 0;
+		p_file->m_Attribs = File::mATTRIB_READABLE | File::mATTRIB_WRITEABLE;
+	}
+
+	return p_file;
 }
 
 
@@ -857,9 +912,56 @@ File* Card::Open( const char* filename, int mode, size_t size )
 /******************************************************************/
 bool Card::GetFileList( const char* mask, Lst::Head< File > &file_list )
 {
+	EnsureSaveRoot();
+
+	const char *effective_mask = ( mask && *mask ) ? mask : "*";
+
+	char search_pattern[MAX_FILENAME_LENGTH];
+	_snprintf_s( search_pattern, _TRUNCATE, "%s\\%s", SAVE_ROOT, effective_mask );
+
+	WIN32_FIND_DATAA find_data;
+	HANDLE handle = FindFirstFileA( search_pattern, &find_data );
+	if ( handle == INVALID_HANDLE_VALUE )
+		return true;
+
+	do
+	{
+		if ( strcmp( find_data.cFileName, "." ) == 0 || strcmp( find_data.cFileName, ".." ) == 0 )
+			continue;
+
+		File *new_file = new File( 0, this );
+
+		strncpy( new_file->m_Filename, find_data.cFileName, File::vMAX_FILENAME_LEN );
+		new_file->m_Filename[File::vMAX_FILENAME_LEN] = 0;
+
+		strncpy( new_file->m_DisplayFilename, find_data.cFileName, File::vMAX_DISPLAY_FILENAME_LEN );
+		new_file->m_DisplayFilename[File::vMAX_DISPLAY_FILENAME_LEN] = 0;
+
+		FillDateTime( new_file->m_Created, find_data.ftCreationTime );
+		FillDateTime( new_file->m_Modified, find_data.ftLastWriteTime );
+
+		new_file->m_Size = find_data.nFileSizeLow;
+		new_file->m_Attribs = 0;
+		if ( find_data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY )
+			new_file->m_Attribs |= File::mATTRIB_DIRECTORY;
+		if ( !( find_data.dwFileAttributes & FILE_ATTRIBUTE_READONLY ) )
+			new_file->m_Attribs |= File::mATTRIB_WRITEABLE;
+		new_file->m_Attribs |= File::mATTRIB_READABLE;
+
+		file_list.AddToTail( new_file );
+	}
+	while ( FindNextFileA( handle, &find_data ) );
+	FindClose( handle );
+	return true;
+}
+
+// Xbox-era dead code kept around for reference.
+#if 0
+bool Card::GetFileList_Legacy( const char* mask, Lst::Head< File > &file_list )
+{
 	(void)mask;
 	(void)file_list;
-	/*
+
 	HANDLE			handle;
 	XGAME_FIND_DATA	find_data;
 
@@ -882,7 +984,7 @@ bool Card::GetFileList( const char* mask, Lst::Head< File > &file_list )
 		new_file->m_Filename[strlen( new_file->m_Filename ) - 1] = 0;
 
 		wsprintfA( new_file->m_DisplayFilename, "%ls", find_data.szSaveGameName );
-		
+
 		FILETIME local_file_time;
 		FileTimeToLocalFileTime(&find_data.wfd.ftLastWriteTime,&local_file_time);
 		SYSTEMTIME system_file_time;
@@ -901,17 +1003,22 @@ bool Card::GetFileList( const char* mask, Lst::Head< File > &file_list )
 	}
 	while( XFindNextSaveGame( handle, &find_data ));
 	XFindClose( handle );
-	*/
 	return true;
 }
+#endif
 
 
-File::File( int fd, Card* card ) : Lst::Node< File > ( this ), m_fd( fd ), m_card( card )
+File::File( intptr_t fd, Card* card ) : Lst::Node< File > ( this ), m_fd( fd ), m_card( card )
 {
 }
-		
+
 File::~File()
 {
+	if ( m_fd != 0 )
+	{
+		fclose( reinterpret_cast<FILE *>( m_fd ) );
+		m_fd = 0;
+	}
 }
 
 /******************************************************************/
@@ -921,46 +1028,39 @@ File::~File()
 
 int File::Seek( ptrdiff_t offset, FilePointerBase base )
 {
-	(void)offset;
-	(void)base;
+	if ( m_fd == 0 )
+		return -1;
 
-	Dbg_Assert(0);
-
-	/*
-	Dbg_Assert( m_fd != 0 );
-
-	DWORD dwMoveMethod;
-
-	switch( base )
+	int origin;
+	switch ( base )
 	{
-		case BASE_START:
-			dwMoveMethod = FILE_BEGIN;
-			break;
-		case BASE_CURRENT:
-			dwMoveMethod = FILE_CURRENT;
-			break;
-		case BASE_END:
-			dwMoveMethod = FILE_END;
-			break;
-		default:
-			dwMoveMethod = FILE_END;
-			Dbg_MsgAssert( 0,( "Invalid FilePointerBase\n" ));
-			break;
+		case BASE_START:	origin = SEEK_SET; break;
+		case BASE_CURRENT:	origin = SEEK_CUR; break;
+		case BASE_END:		origin = SEEK_END; break;
+		default:			origin = SEEK_END; break;
 	}
 
+	FILE *fp = reinterpret_cast<FILE *>( m_fd );
+	if ( _fseeki64( fp, (long long)offset, origin ) != 0 )
+		return -1;
 
-	DWORD result = SetFilePointer(	(HANDLE)m_fd,		// handle to file
-									offset,				// bytes to move pointer
-									nullptr,				// high-order bytes to move pointer
-									dwMoveMethod );		// starting point
-	return result;
-	*/
-	return 0;
+	long long pos = _ftelli64( fp );
+	if ( pos < 0 )
+		return -1;
+	if ( pos > 0x7FFFFFFF )
+		pos = 0x7FFFFFFF;
+	return (int)pos;
 }
 
 size_t File::Tell()
 {
-	return 0;
+	if ( m_fd == 0 )
+		return 0;
+
+	long long pos = _ftelli64( reinterpret_cast<FILE *>( m_fd ) );
+	if ( pos < 0 )
+		return 0;
+	return (size_t)pos;
 }
 
 /******************************************************************/
@@ -970,14 +1070,11 @@ size_t File::Tell()
 
 bool File::Flush( void )
 {
-	Dbg_Assert( m_fd != 0 );
+	if ( m_fd == 0 )
+		return false;
 
-	// FlushFileBuffers((HANDLE)m_fd );
-
-	// The FlushFileBuffers() is pretty strict about what types of files wmay be flushed,
-	// whereas the PS2 equivalent doesn't really care. Just return a positive response always,
-	// no critical stuff predicated on this return anway.
-	return true;
+	FILE *fp = reinterpret_cast<FILE *>( m_fd );
+	return fflush( fp ) == 0;
 }
 
 /******************************************************************/
@@ -987,42 +1084,14 @@ bool File::Flush( void )
 
 size_t	File::Write( void* buffer, size_t len )
 {
-	(void)buffer;
-	(void)len;
+	if ( m_fd == 0 || buffer == nullptr || len == 0 )
+		return 0;
 
-	Dbg_Assert( m_fd != 0 );
-
-	/*
-//	Skate3 code, disabled for now.
-#	if 0
-	m_not_enough_space_to_write_file=false;
-#	endif
-
-	DWORD bytes_written;
-	BOOL rv = WriteFile(	(HANDLE)m_fd,		// handle to file
-							buffer,				// data buffer
-							len,				// number of bytes to write
-							&bytes_written,		// number of bytes written
-							nullptr );			// overlapped buffer
-							
-//	Skate3 code, disabled for now.
-#	if 0
-	if (rv==ERROR_NOT_ENOUGH_MEMORY)
-	{
-		m_not_enough_space_to_write_file=true;
-	}
-	if (GetLastError()==ERROR_DISK_FULL)
-	{
-		m_not_enough_space_to_write_file=true;
-	}
-#	endif
-		
-	if( rv )
-	{
-		return (int)bytes_written;
-	}
-	*/
-	return 0;
+	FILE *fp = reinterpret_cast<FILE *>( m_fd );
+	size_t written = fwrite( buffer, 1, len, fp );
+	if ( written < len && m_card != nullptr && ferror( fp ) && errno == ENOSPC )
+		m_card->SetError( Card::vINSUFFICIENT_SPACE );
+	return written;
 }
 
 
@@ -1034,24 +1103,11 @@ size_t	File::Write( void* buffer, size_t len )
 
 size_t	File::Read( void* buff, size_t len )
 {
-	(void)buff;
-	(void)len;
+	if ( m_fd == 0 || buff == nullptr || len == 0 )
+		return 0;
 
-	Dbg_Assert( m_fd != 0 );
-
-	/*
-	DWORD bytes_read;
-	BOOL rv = ReadFile(	(HANDLE)m_fd,			// handle to file
-						buff,					// data buffer
-						len,					// number of bytes to read
-						&bytes_read,			// number of bytes read
-						nullptr );					// overlapped buffer
-	if( rv )
-	{
-		return (int)bytes_read;
-	}
-	*/
-	return 0;
+	FILE *fp = reinterpret_cast<FILE *>( m_fd );
+	return fread( buff, 1, len, fp );
 }
 
 
@@ -1063,9 +1119,12 @@ size_t	File::Read( void* buff, size_t len )
 
 bool File::Close( void )
 {
-	Dbg_Assert( m_fd != 0 );
+	if ( m_fd == 0 )
+		return false;
 
-	return false; // return CloseHandle((HANDLE)m_fd );
+	int rc = fclose( reinterpret_cast<FILE *>( m_fd ) );
+	m_fd = 0;
+	return rc == 0;
 }
 
 /******************************************************************/

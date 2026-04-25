@@ -122,6 +122,7 @@
 #include <Plat/Gfx/p_memview.h>
 
 extern bool	skip_startup;
+extern bool	gAutoloadLevel;
 
 
 namespace Front
@@ -295,6 +296,11 @@ void		Skate::v_start_cb ( void )
 			// Run the personal startup script.
 			Script::RunScript("Call_Personal_StartUp_Script");
 		}
+	}
+
+	if ( gAutoloadLevel )
+	{
+		Script::RunScript("autoload");
 	}
 }
 

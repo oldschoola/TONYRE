@@ -69,5 +69,11 @@ namespace NxWn32
 			{
 				glBindTexture(GL_TEXTURE_2D, m_color_texture);
 			}
+
+			// Raw handle for ImGui::Image. Safe read-only accessor.
+			GLuint GetColorTexture() const
+			{
+				return m_color_texture;
+			}
 	};
 }

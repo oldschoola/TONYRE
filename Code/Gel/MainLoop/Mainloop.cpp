@@ -31,7 +31,13 @@
 
 #include <Gfx/nx.h>
 
+#include <Sys/timer.h>
+
 #include <Sys/Profiler.h>
+
+#if defined(DEBUG_IMGUI)
+#include "Plugins/ImGui/Panels/PerformancePanel.h"
+#endif
 
 #include <Plat/Gfx/p_memview.h>
 
@@ -308,20 +314,86 @@ void		Manager::MainLoop( void )
 #	endif		
 #	endif		
 					 
-		service_system();
-
-#if	defined(__PLAT_NGPS__) && defined(BATCH_TRI_COLLISION)
-		// Enable VU0 collision
-		bool got_vu0 = Nx::CBatchTriCollMan::sUseVU0Micro();
-		Dbg_Assert(got_vu0);
+#if defined(DEBUG_IMGUI)
+		const bool uncapped = Debug::PerformancePanel::IsFramerateUncapped();
+#else
+		const bool uncapped = false;
 #endif
 
- #ifdef	__PLAT_NGPS__		
+		// Fixed-step game logic under VFR. When the render rate is uncapped,
+		// ticking service_system() + game_logic() once per render frame makes
+		// everything that counts logic ticks (wait N gameframes, per-frame
+		// particle spawns, frame-counted state machines) run at render rate
+		// instead of the engine's 60 Hz contract. Drive logic from a wall-clock
+		// accumulator and pin FrameLength() to 1/60 during drain so every
+		// FrameLength-scaled component keeps its original per-tick delta.
+		static bool   s_was_uncapped = false;
+		static double s_logic_accum  = 0.0;
+		static double s_last_wall    = 0.0;
+		constexpr double kFixedStep  = 1.0 / 60.0;
+		constexpr double kMaxAccum   = 5.0 / 60.0;  // anti-spiral: drop surplus after long stall
+
+		if (uncapped)
+		{
+			const double now = Tmr::GetWallTimeSeconds();
+			if (!s_was_uncapped)
+			{
+				// Cap → uncap transition: reset bookkeeping so we don't try to
+				// "catch up" frames the capped path already serviced.
+				s_logic_accum = 0.0;
+				s_last_wall   = now;
+			}
+			s_logic_accum += (now - s_last_wall);
+			s_last_wall    = now;
+			if (s_logic_accum > kMaxAccum)
+				s_logic_accum = kMaxAccum;
+
+#if defined(DEBUG_IMGUI)
+			// Stamp "service" before the drain so the "logic" segment captures wall
+			// time spent on the entire drain loop (the user-meaningful number under
+			// uncap). One pair of checkpoints per render frame regardless of tick
+			// count — inner-loop checkpoints would double-count into kMaxSegments.
+			Debug::PerformancePanel::RecordCheckpoint("service");
+#endif
+
+			Tmr::SetFixedFrameDelta(kFixedStep);
+			while (s_logic_accum >= kFixedStep)
+			{
+				service_system();
+				game_logic();
+				s_logic_accum -= kFixedStep;
+			}
+			Tmr::ClearFixedFrameDelta();
+
+#if defined(DEBUG_IMGUI)
+			Debug::PerformancePanel::RecordCheckpoint("logic");
+#endif
+		}
+		else
+		{
+			// Capped: original behaviour, bit-for-bit identical.
+			service_system();
+
+#if defined(DEBUG_IMGUI)
+			Debug::PerformancePanel::RecordCheckpoint("service");
+#endif
+
+#if	defined(__PLAT_NGPS__) && defined(BATCH_TRI_COLLISION)
+			// Enable VU0 collision
+			bool got_vu0 = Nx::CBatchTriCollMan::sUseVU0Micro();
+			Dbg_Assert(got_vu0);
+#endif
+
+ #ifdef	__PLAT_NGPS__
 //		snProfSetRange( -1, (void*)0, (void*)-1);
 //		snProfSetFlagValue(0x01);
  #endif
 
-		game_logic();		
+			game_logic();
+
+#if defined(DEBUG_IMGUI)
+			Debug::PerformancePanel::RecordCheckpoint("logic");
+#endif
 
  #ifdef	__PLAT_NGPS__		
 //		snProfSetRange( 4, (void*)nullptr, (void*)-1);
@@ -329,12 +401,14 @@ void		Manager::MainLoop( void )
 
 
 #if	defined(__PLAT_NGPS__) && defined(BATCH_TRI_COLLISION)
-		// Disable VU0 collision
-		if (got_vu0)
-		{
-			Nx::CBatchTriCollMan::sDisableVU0Micro();
-		}
+			// Disable VU0 collision
+			if (got_vu0)
+			{
+				Nx::CBatchTriCollMan::sDisableVU0Micro();
+			}
 #endif
+		}
+		s_was_uncapped = uncapped;
 
 #	ifdef __USE_PROFILER__
 		Sys::CPUProfiler->PushContext( 255, 255, 0 );  // yellow = render world

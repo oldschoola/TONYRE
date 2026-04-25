@@ -1837,7 +1837,11 @@ void Update( void )
 	// the music now since I don't know if there is a CPU hit there.
 	sCounter++;
 
-	//if ( !( sCounter & ( STREAM_POSITIONAL_UPDATE_INTERVAL - 1 ) ) )
+	// Throttle to original Neversoft cadence (every 4 frames). Each iteration
+	// acquires Audio::Lock (SDL_LockAudioDevice) inside SetStreamVolume; running
+	// every frame produces ~0.5s beat-pattern stalls when render-thread lock
+	// requests collide with the 21.3ms audio mix callback.
+	if ( !( sCounter & ( STREAM_POSITIONAL_UPDATE_INTERVAL - 1 ) ) )
 	for (int streamingObjToUpdate = 0; streamingObjToUpdate < NUM_STREAMS; streamingObjToUpdate++)
 	{
 		if ( gpStreamingObj[ streamingObjToUpdate ] )
@@ -1848,12 +1852,6 @@ void Update( void )
 				gpStreamingObj[ streamingObjToUpdate ] = nullptr;
 			}
 		}
-		//// update the other one next time...
-		//streamingObjToUpdate++;
-		//if ( streamingObjToUpdate >= NUM_STREAMS )
-		//{
-		//	streamingObjToUpdate = 0;
-		//}
 	}
 
 	// Free any frame amp data that was used by a stream that already stopped

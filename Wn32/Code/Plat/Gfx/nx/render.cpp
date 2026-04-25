@@ -7,6 +7,7 @@
 
 #include <Plat/Gfx/p_NxGeom.h>
 #include <Sys/timer.h>
+#include <Gfx/FrameDiag.h>
 #include "nx_init.h"
 #include "scene.h"
 #include "render.h"
@@ -1708,7 +1709,7 @@ void create_texture_projection_details( sTexture *p_texture, Nx::CXboxModel *p_m
 
 	pTextureProjectionDetailsTable->PutItem((uint32)(uintptr_t)p_texture, p_details );
 
-	FILE *f = fopen("shadow_diag.log", "a");
+	FILE *f = FrameDiag::OpenShadow();
 	if (f) { fprintf(f, "create_texture_projection_details: tex=%p model=%p scene=%p\n", (void*)p_texture, (void*)p_model, (void*)p_scene); fclose(f); }
 }
 
@@ -1748,7 +1749,10 @@ void set_texture_projection_camera( sTexture *p_texture, const glm::vec3 &pos, c
 			up = glm::vec3(0.0f, 0.0f, 1.0f);
 		}
 		p_details->view_matrix       = glm::lookAtRH(pos, at, up);
-		p_details->projection_matrix = glm::orthoRH_NO(-48.0f, 48.0f, -48.0f, 48.0f, 1.0f, 128.0f);
+		// Ortho widened from 96×96 / far=128 → 160×160 / far=256 so shadow
+		// footprint no longer clips close behind/around skater. m_distance=72,
+		// so ~184u of projector-space Z beyond the skater is now in-frustum.
+		p_details->projection_matrix = glm::orthoRH_NO(-80.0f, 80.0f, -80.0f, 80.0f, 0.5f, 256.0f);
 	}
 }
 
@@ -1780,6 +1784,7 @@ void set_camera( Mth::Matrix *p_matrix, Mth::Vector *p_position, float screen_an
 	EngineGlobals.cam_position = glm::vec3(p_position->GetX(), p_position->GetY(), p_position->GetZ());
 	EngineGlobals.cam_at = glm::vec3(p_matrix->GetAt().GetX(), p_matrix->GetAt().GetY(), p_matrix->GetAt().GetZ());
 	EngineGlobals.cam_up = glm::vec3(p_matrix->GetUp().GetX(), p_matrix->GetUp().GetY(), p_matrix->GetUp().GetZ());
+	EngineGlobals.cam_right = glm::vec3(p_matrix->GetRight().GetX(), p_matrix->GetRight().GetY(), p_matrix->GetRight().GetZ());
 
 	// EngineGlobals.world_matrix = glm::mat4(1.0f);
 
@@ -2201,13 +2206,16 @@ void render_shadow_targets( void )
 	if( !pTextureProjectionDetailsTable )
 	{
 		if( diag ) {
-			FILE *f = fopen("shadow_diag.log", "a");
+			FILE *f = FrameDiag::OpenShadow();
 			if (f) { fprintf(f, "render_shadow_targets: NO TABLE\n"); fclose(f); }
 		}
 		return;
 	}
 
-	// Stash state we are about to trash.
+	// Stash state we are about to trash. Read live GL state — engine globals
+	// (backbuffer_width/height) may be unset on the first frame and assuming
+	// FBO=0 breaks any caller that has another FBO bound. Cost is small
+	// versus a black-screen regression.
 	glm::mat4 stored_view     = EngineGlobals.view_matrix;
 	glm::mat4 stored_proj     = EngineGlobals.projection_matrix;
 	GLint     stored_viewport[4];
@@ -2232,7 +2240,7 @@ void render_shadow_targets( void )
 		bool is_rt     = has_tex && p_details->p_texture->IsRenderTarget;
 		bool has_fbo   = has_tex && (p_details->p_texture->GLFramebuffer != 0);
 		if( diag ) {
-			FILE *f = fopen("shadow_diag.log", "a");
+			FILE *f = FrameDiag::OpenShadow();
 			if (f) { fprintf(f, "render_shadow_targets: entry#%d model=%d tex=%d rt=%d fbo=%d\n", entry_count, has_model, has_tex, is_rt, has_fbo); fclose(f); }
 		}
 		if( p_details->p_model && p_details->p_texture && p_details->p_texture->IsRenderTarget && p_details->p_texture->GLFramebuffer )
@@ -2266,7 +2274,7 @@ void render_shadow_targets( void )
 				inst_drawn++;
 			}
 			if( diag ) {
-				FILE *f = fopen("shadow_diag.log", "a");
+				FILE *f = FrameDiag::OpenShadow();
 				if (f) { fprintf(f, "  casters: num_geoms=%d drawn=%d\n", num_geoms, inst_drawn); fclose(f); }
 			}
 
@@ -2293,7 +2301,7 @@ void render_shadow_targets( void )
 	}
 
 	if( diag ) {
-		FILE *f = fopen("shadow_diag.log", "a");
+		FILE *f = FrameDiag::OpenShadow();
 		if (f) { fprintf(f, "render_shadow_targets: entries=%d drawn=%d enabled=%d tex_id=%u origin=(%.1f,%.1f,%.1f)\n",
 			entry_count, drawn_count, (int)EngineGlobals.shadow_enabled, (unsigned)EngineGlobals.shadow_texture_id,
 			EngineGlobals.shadow_origin.x, EngineGlobals.shadow_origin.y, EngineGlobals.shadow_origin.z); fclose(f); }

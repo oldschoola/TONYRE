@@ -122,14 +122,65 @@ add_library(TonyRE.Wn32 STATIC
 
 	"Code/Plat/Sys/SIO/DualSense/FHIDDeviceInfo.h"
 	"Code/Plat/Sys/SIO/DualSense/FHIDDeviceInfo.cpp"
+	"Code/Plat/Sys/SIO/DualSense/FAsyncCachedHIDDeviceInfo.h"
+	"Code/Plat/Sys/SIO/DualSense/FAsyncCachedHIDDeviceInfo.cpp"
 	"Code/Plat/Sys/SIO/DualSense/TonyRegistryPolicy.h"
 	"Code/Plat/Sys/SIO/DualSense/DualSense_Pump.h"
 	"Code/Plat/Sys/SIO/DualSense/DualSense_Pump.cpp"
 
 	"Code/Plat/Sys/p_timer.cpp"
+
+	# Debug ImGui (Phase 2: skeleton; Phase 3: overlay hookup; Phase 4+: panels)
+	"${CMAKE_SOURCE_DIR}/Code/Plugins/ImGui/ImGuiLayer.cpp"
+	"${CMAKE_SOURCE_DIR}/Code/Plugins/ImGui/ImGuiLayer.h"
+	"${CMAKE_SOURCE_DIR}/Code/Plugins/ImGui/IDebugPanel.h"
+	"${CMAKE_SOURCE_DIR}/Code/Plugins/ImGui/EditorPersistence.cpp"
+	"${CMAKE_SOURCE_DIR}/Code/Plugins/ImGui/EditorPersistence.h"
+	"${CMAKE_SOURCE_DIR}/Code/Plugins/ImGui/Panels/LightingPanel.cpp"
+	"${CMAKE_SOURCE_DIR}/Code/Plugins/ImGui/Panels/LightingPanel.h"
+	"${CMAKE_SOURCE_DIR}/Code/Plugins/ImGui/Panels/NpcsPanel.cpp"
+	"${CMAKE_SOURCE_DIR}/Code/Plugins/ImGui/Panels/NpcsPanel.h"
+	"${CMAKE_SOURCE_DIR}/Code/Plugins/ImGui/Panels/GoalsPanel.cpp"
+	"${CMAKE_SOURCE_DIR}/Code/Plugins/ImGui/Panels/GoalsPanel.h"
+	"${CMAKE_SOURCE_DIR}/Code/Plugins/ImGui/Panels/RailsPanel.cpp"
+	"${CMAKE_SOURCE_DIR}/Code/Plugins/ImGui/Panels/RailsPanel.h"
+	"${CMAKE_SOURCE_DIR}/Code/Plugins/ImGui/Panels/WaypointsPanel.cpp"
+	"${CMAKE_SOURCE_DIR}/Code/Plugins/ImGui/Panels/WaypointsPanel.h"
+	"${CMAKE_SOURCE_DIR}/Code/Plugins/ImGui/Panels/ObjectsPanel.cpp"
+	"${CMAKE_SOURCE_DIR}/Code/Plugins/ImGui/Panels/ObjectsPanel.h"
+	"${CMAKE_SOURCE_DIR}/Code/Plugins/ImGui/Panels/MissionPanel.cpp"
+	"${CMAKE_SOURCE_DIR}/Code/Plugins/ImGui/Panels/MissionPanel.h"
+	"${CMAKE_SOURCE_DIR}/Code/Plugins/ImGui/Panels/EditorToolbarPanel.cpp"
+	"${CMAKE_SOURCE_DIR}/Code/Plugins/ImGui/Panels/EditorToolbarPanel.h"
+	"${CMAKE_SOURCE_DIR}/Code/Plugins/ImGui/Panels/PerformancePanel.cpp"
+	"${CMAKE_SOURCE_DIR}/Code/Plugins/ImGui/Panels/PerformancePanel.h"
+	"${CMAKE_SOURCE_DIR}/Code/Plugins/ImGui/WorldProject.cpp"
+	"${CMAKE_SOURCE_DIR}/Code/Plugins/ImGui/WorldProject.h"
+	"${CMAKE_SOURCE_DIR}/Code/Plugins/ImGui/ModelPreview.cpp"
+	"${CMAKE_SOURCE_DIR}/Code/Plugins/ImGui/ModelPreview.h"
+	"${CMAKE_SOURCE_DIR}/Code/Plugins/ImGui/imgui.cpp"
+	"${CMAKE_SOURCE_DIR}/Code/Plugins/ImGui/imgui.h"
+	"${CMAKE_SOURCE_DIR}/Code/Plugins/ImGui/imgui_draw.cpp"
+	"${CMAKE_SOURCE_DIR}/Code/Plugins/ImGui/imgui_tables.cpp"
+	"${CMAKE_SOURCE_DIR}/Code/Plugins/ImGui/imgui_widgets.cpp"
+	"${CMAKE_SOURCE_DIR}/Code/Plugins/ImGui/imgui_internal.h"
+	"${CMAKE_SOURCE_DIR}/Code/Plugins/ImGui/imconfig.h"
+	"${CMAKE_SOURCE_DIR}/Code/Plugins/ImGui/imstb_rectpack.h"
+	"${CMAKE_SOURCE_DIR}/Code/Plugins/ImGui/imstb_textedit.h"
+	"${CMAKE_SOURCE_DIR}/Code/Plugins/ImGui/imstb_truetype.h"
+	"${CMAKE_SOURCE_DIR}/Code/Plugins/ImGui/backends/imgui_impl_sdl2.cpp"
+	"${CMAKE_SOURCE_DIR}/Code/Plugins/ImGui/backends/imgui_impl_sdl2.h"
+	"${CMAKE_SOURCE_DIR}/Code/Plugins/ImGui/backends/imgui_impl_opengl3.cpp"
+	"${CMAKE_SOURCE_DIR}/Code/Plugins/ImGui/backends/imgui_impl_opengl3.h"
+	"${CMAKE_SOURCE_DIR}/Code/Plugins/ImGui/backends/imgui_impl_opengl3_loader.h"
 )
 target_link_libraries(TonyRE.Wn32 PUBLIC TonyRE.Code TonyRE.Common)
 target_include_directories(TonyRE.Wn32 PUBLIC "Code")
+
+# Debug ImGui: header-only public path so any translation unit can
+# #include "ImGuiLayer.h"; compilation-unit define gates the whole subsystem.
+target_include_directories(TonyRE.Wn32 PUBLIC "${CMAKE_SOURCE_DIR}/Code/Plugins/ImGui")
+target_compile_definitions(TonyRE.Wn32 PUBLIC DEBUG_IMGUI)
 
 # GamepadCore (DualSense / DualShock 4) sibling checkout.
 # Expected at ../Dualsense-Multiplatform relative to the TONYRE repo root.

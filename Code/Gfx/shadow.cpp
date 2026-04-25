@@ -23,6 +23,7 @@
 #include <Gfx/nx.h>
 #include <Gfx/NxModel.h>
 #include <Gfx/NxTextured3dPoly.h>
+#include <Gfx/FrameDiag.h>
 
 namespace Gfx
 {
@@ -39,7 +40,7 @@ CShadow::~CShadow()
 CDetailedShadow::CDetailedShadow(Nx::CModel *p_model, Mth::Vector camera_direction, float camera_distance)
 {
 	m_type=vDETAILED_SHADOW;
-	mp_texture = Nx::CEngine::sCreateRenderTargetTexture( 256, 256, 16, 16 );		// maybe platform dependent?
+	mp_texture = Nx::CEngine::sCreateRenderTargetTexture( 512, 512, 16, 16 );		// 512×512: 2× over original to kill pixelation on walls close to skater.
 	
 	// Note, engine will figure out scene for itself
 	Nx::CEngine::sProjectTextureIntoScene( mp_texture, p_model );		
@@ -173,7 +174,7 @@ void CSimpleShadow::SetModel(const char *p_model_name)
 
 	// TODO: Change to use a geom file instead for PS2, more efficient than mdl ...
 	bool ok = mp_model->AddGeom(Gfx::GetModelFileName(p_model_name, ".mdl").getString(), 0, true);
-	FILE *f = fopen("shadow_diag.log", "a");
+	FILE *f = FrameDiag::OpenShadow();
 	if (f) { fprintf(f, "SetModel '%s' ok=%d geoms=%d\n", p_model_name, (int)ok, mp_model ? mp_model->GetNumGeoms() : -1); fclose(f); }
 	if (mp_model)
 	{
@@ -227,7 +228,7 @@ void CSimpleShadow::UpdatePosition(Mth::Vector& parentPos, Mth::Matrix& parentMa
 			if (c <= 3 || (c & 127) == 0)
 			{
 				Mth::Vector dp = display_matrix.GetPos();
-				FILE *f = fopen("shadow_diag.log", "a");
+				FILE *f = FrameDiag::OpenShadow();
 				if (f)
 				{
 					fprintf(f, "SIMPLESHADOW: this=%p call#%d mp_model=%p active=%d geoms=%d parent=(%.1f,%.1f,%.1f) disp=(%.1f,%.1f,%.1f) scale=%.2f\n",

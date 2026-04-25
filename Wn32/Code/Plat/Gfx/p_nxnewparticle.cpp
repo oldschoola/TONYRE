@@ -22,6 +22,7 @@
 #include "p_nxnewparticle.h"
 
 #include <Gfx/NxTexMan.h>
+#include <Gfx/FrameDiag.h>
 #include "p_nxtexture.h"
 #include "nx/nx_init.h"
 #include "nx/render.h"
@@ -129,11 +130,27 @@ void CParticleStream::AdvanceSeed( int num_places )
 void CXboxNewParticle::plat_render( void )
 {
 	#define PART_TRACE(tag) do { \
-		FILE *_f = fopen("frame_trace.log", "a"); \
+		FILE *_f = FrameDiag::OpenFrameTrace(); \
 		if (_f) { fprintf(_f, "part:%s this=%p\n", tag, (void*)this); fclose(_f); } \
 	} while(0)
 
 	PART_TRACE("enter");
+
+	// SPARK diag — confirm grind/flame emitters reach render with sane position.
+	{
+		static int s_log = 0;
+		if( (s_log++ % 180) == 0 ) {
+			FILE *f = FrameDiag::OpenShadow();
+			if (f) {
+				fprintf(f, "PART this=%p streams=%d emit=%d local=%d p0=(%.1f,%.1f,%.1f) box0=(%.1f,%.1f,%.1f) life=%.2f\n",
+					this, m_num_streams, (int)m_emitting, (int)m_params.m_LocalCoord,
+					m_p0[0], m_p0[1], m_p0[2],
+					m_params.m_BoxPos[0][0], m_params.m_BoxPos[0][1], m_params.m_BoxPos[0][2],
+					m_params.m_Lifetime);
+				fclose(f);
+			}
+		}
+	}
 
 	// Stream bookkeeping (births/deaths/ages). Ported from Xbox path, no draw calls yet.
 	CParticleStream* p_stream;
@@ -216,12 +233,10 @@ void CXboxNewParticle::plat_render( void )
 	struct Vert { float px, py, pz; float u, v; float r, g, b, a; };
 	std::vector< Vert > verts;
 
-	// Emitter origin — local-coord systems use m_RotMatrix origin; world-coord use m_BoxPos[0].
-	Mth::Vector emitter_pos = m_params.m_BoxPos[vBOX_START];
-	if( m_params.m_LocalCoord )
-	{
-		emitter_pos = m_params.m_RotMatrix.GetPos();
-	}
+	// NOTE: no emitter_pos add — update_position() bakes m_BoxPos[0] into m_p0
+	// so m_p0 is already absolute world position. For LocalCoord, ParticleComponent::Update
+	// rewrites m_BoxPos[i] = LocalBoxPos[i] + obj.m_pos every frame and plat_update re-bakes
+	// m_p0. Adding emitter_pos on top would double-count the world position.
 
 	p_stream = mp_oldest_stream;
 	for( int s = 0; s < m_num_streams; ++s )
@@ -238,14 +253,16 @@ void CXboxNewParticle::plat_render( void )
 
 				float t = age / m_params.m_Lifetime;
 
-				// Position = emitter + p0 + p1*t + p2*t²  (average path, ignoring per-particle rand jitter).
-				Mth::Vector pos = emitter_pos
-					+ m_p0
+				// Position = p0 + p1*t + p2*t²  (average path, ignoring per-particle rand jitter).
+				// m_p0 already contains the absolute world position (see update_position).
+				Mth::Vector pos = m_p0
 					+ m_p1 * age
 					+ m_p2 * (age * age * 0.5f);
 
-				// Radius = s0 + s1*t + s2*t² (approx).
-				float radius = m_s0[3] + m_s1[3] * age + m_s2[3] * (age * age * 0.5f);
+				// Radius = p0[3] + p1[3]*t + p2[3]*t² — driven by m_Radius track.
+				// m_s* is RadiusSpread (jitter range) used by the Xbox path for random
+				// per-particle variance; using it as base radius made quads tiny.
+				float radius = m_p0[3] + m_p1[3] * age + m_p2[3] * (age * age * 0.5f);
 				if( radius < 0.5f ) radius = 0.5f;
 
 				// Color interpolation between box colors over lifetime.
@@ -389,12 +406,19 @@ void CXboxNewParticle::update_position( void )
 		a_.Set( 0, 0, 0, 0 );
 	}
 
-	m_p0 = x0 - 1.5f * m_s0;
-	m_p1 = u  - 1.5f * m_s1;
-	m_p2 = a_ - 1.5f * m_s2;
-	m_p0[3] = x0[3] - 1.5f * m_s0[3];
-	m_p1[3] = u[3]  - 1.5f * m_s1[3];
-	m_p2[3] = a_[3] - 1.5f * m_s2[3];
+	// XYZ: start at nominal position. The Xbox path subtracted 1.5*spread (BoxDims) here
+	// and added random per-particle jitter on top, re-centering the distribution around x0.
+	// This port skips the random jitter, so the shift stays visible and particles appear
+	// offset from the emitter. Keep position track = x0 exactly.
+	m_p0 = x0;
+	m_p1 = u;
+	m_p2 = a_;
+	// [3] (radius) = actual size track from m_Radius. DO NOT subtract 1.5*spread
+	// — that bias belongs to the Xbox random-jitter path; subtracting it without
+	// the random compensation drove particle radius near-zero (gas invisible).
+	m_p0[3] = x0[3];
+	m_p1[3] = u[3];
+	m_p2[3] = a_[3];
 }
 
 

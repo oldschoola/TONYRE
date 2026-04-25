@@ -87,6 +87,18 @@ uint64 	GetVblanks();
 
 float 	FrameLength();
 double 	UncappedFrameLength();
+
+// Fixed-step game logic support. While a fixed delta is active, FrameLength()
+// and UncappedFrameLength() return the override instead of wall-clock delta —
+// used by the main loop to keep components ticking at exactly 60 Hz under VFR.
+void	SetFixedFrameDelta(double seconds);
+void	ClearFixedFrameDelta();
+
+// Monotonic wall time in seconds since process start. Used by the main loop
+// accumulator so it advances on real time, not the (potentially overridden)
+// FrameLength.
+double	GetWallTimeSeconds();
+
 void 	VSync();
 void 	VSync1();
 float 	GetSlomo();

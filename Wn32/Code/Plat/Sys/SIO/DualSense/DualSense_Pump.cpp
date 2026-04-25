@@ -2,6 +2,7 @@
 
 #include "DualSense_Pump.h"
 
+#include "FAsyncCachedHIDDeviceInfo.h"
 #include "FHIDDeviceInfo.h"
 #include "TonyRegistryPolicy.h"
 
@@ -14,6 +15,10 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
+
+#if defined(DEBUG_IMGUI)
+#include "Plugins/ImGui/Panels/PerformancePanel.h"
+#endif
 
 namespace DualSensePump
 {
@@ -82,7 +87,11 @@ namespace
 void Init()
 {
 	if (g_Registry) return;
-	IPlatformHardwareInfo::SetInstance(std::make_unique<FHIDDeviceInfo>());
+	// Detect() walks the SetupDi HID tree (~60ms on Windows). The async wrapper
+	// hoists Detect to a background thread and serves a cached snapshot to
+	// TBasicDeviceRegistry::PlugAndPlay, eliminating the periodic main-thread
+	// spike. All other ops (CreateHandle/Read/Write) still run on main thread.
+	IPlatformHardwareInfo::SetInstance(std::make_unique<FAsyncCachedHIDDeviceInfo>());
 	g_Registry = new FRegistry();
 	// First pass so pads plugged in at boot are ready immediately.
 	g_Registry->RequestImmediateDetection();
@@ -144,6 +153,12 @@ void Tick(float DeltaTime)
 			Pad->UpdateInput(DeltaTime);
 		}
 	}
+
+#if defined(DEBUG_IMGUI)
+	// Stamp the moment fresh HID samples were pulled. Perf panel pairs this
+	// with RecordSwapIssued to compute per-frame input → swap latency.
+	Debug::PerformancePanel::RecordInputSampled();
+#endif
 }
 
 ISonyGamepad* GetPadForPort(int Port)

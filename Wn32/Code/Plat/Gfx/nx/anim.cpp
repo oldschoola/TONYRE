@@ -348,9 +348,10 @@ void setup_weighted_mesh_vertex_shader( void *p_root_matrix, void *p_bone_matric
 	// drives via SetAmbientLightModulationFactor etc. — must be applied here
 	// or NPCs never respond to level brightness changes.
 	//
-	// Direction is stored "from light" in world space; shader needs
-	// "to light" for a plain N·L dot, so negate here (matches the original
-	// Xbox path that wrote -dir[...] into EngineGlobals).
+	// Direction is already stored "to light" (points from surface toward the
+	// light source) — same convention the shader's N·L dot expects. The Xbox
+	// fixed-function path negated it because D3D8 wanted the reverse; in GLSL
+	// we upload it as-is. Negating here put highlights on the underside.
 	{
 		const float amb_brightness = Nx::CLightManager::sGetAmbientBrightness();
 		const float amb_scale = amb_brightness * (1.0f / 128.0f);
@@ -373,9 +374,9 @@ void setup_weighted_mesh_vertex_shader( void *p_root_matrix, void *p_bone_matric
 			light_col[i * 3 + 2] = dif.b * dif_scale;
 
 			Mth::Vector dir = Nx::CLightManager::sGetLightDirection(i);
-			light_dir[i * 4 + 0] = -dir[X];
-			light_dir[i * 4 + 1] = -dir[Y];
-			light_dir[i * 4 + 2] = -dir[Z];
+			light_dir[i * 4 + 0] = dir[X];
+			light_dir[i * 4 + 1] = dir[Y];
+			light_dir[i * 4 + 2] = dir[Z];
 			light_dir[i * 4 + 3] = 0.0f; // min N·L floor; 0 = pure lambert
 		}
 		glUniform3fv(glGetUniformLocation(shader->program, "u_light_col"), 3, light_col);

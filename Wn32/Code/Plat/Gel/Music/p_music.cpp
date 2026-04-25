@@ -465,7 +465,7 @@ namespace Pcm
 			status = PCM_STATUS_PLAYING;
 		else
 			status = PCM_STATUS_FREE;
-		
+
 		Audio::Unlock();
 		return status;
 	}
@@ -575,12 +575,12 @@ namespace Pcm
 	/******************************************************************/
 	bool PCMAudio_SetStreamVolume( Sfx::sVolume *p_volume, int whichStream )
 	{
+		Spt::SingletonPtr< Sfx::CSfxManager > sfx_manager;
+
 		Audio::Lock();
 
 		if (stream_stream[whichStream] != nullptr)
 		{
-			Spt::SingletonPtr< Sfx::CSfxManager > sfx_manager;
-
 			float coef[5] = {};
 
 			switch (p_volume->GetVolumeType())

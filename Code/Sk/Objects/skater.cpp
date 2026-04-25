@@ -961,19 +961,35 @@ void CSkater::UpdateShadow(const Mth::Vector& pos, const Mth::Matrix& matrix)
 		Nx::CModelLights *p_lights = GetModel()->GetModelLights();
 		if( p_lights )
 		{
-			ground_dir = p_lights->GetLightDirection( 0 ) * -1.0f;
+			Mth::Vector raw_dir = p_lights->GetLightDirection( 0 ) * -1.0f;
 
-			if( ground_dir[Y] > -0.65f )
+			// Guard degenerate / NaN light dir — keep previous valid ground_dir instead.
+			float raw_len2 = (raw_dir[X]*raw_dir[X]) + (raw_dir[Y]*raw_dir[Y]) + (raw_dir[Z]*raw_dir[Z]);
+			if( raw_len2 > 0.0001f && raw_len2 == raw_len2 )
 			{
-				// Lighting direction is too shallow, leading to overly extended shadows. Limit direction.
-				// In the new vector, we know we want the [Y] component to be -0.65, so it follows that we
-				// want ( [X]^2 + [Z]^2 ) to be ( 1.0 - ( -0.65 ^2 )), or 0.5775. First, figure out the
-				// current value of ( [X]^2 + [Z]^2 ).
-				float xz_squared	= ( ground_dir[X] * ground_dir[X] ) + ( ground_dir[Z] * ground_dir[Z] );
-				float multiple		= sqrtf( 0.5775f / xz_squared );
-				ground_dir[X]		= ground_dir[X] * multiple;
-				ground_dir[Y]		= -0.65f;
-				ground_dir[Z]		= ground_dir[Z] * multiple;
+				ground_dir = raw_dir;
+
+				if( ground_dir[Y] > -0.65f )
+				{
+					// Lighting direction is too shallow, leading to overly extended shadows. Limit direction.
+					// In the new vector, we know we want the [Y] component to be -0.65, so it follows that we
+					// want ( [X]^2 + [Z]^2 ) to be ( 1.0 - ( -0.65 ^2 )), or 0.5775.
+					float xz_squared	= ( ground_dir[X] * ground_dir[X] ) + ( ground_dir[Z] * ground_dir[Z] );
+					if( xz_squared > 0.0001f )
+					{
+						float multiple	= sqrtf( 0.5775f / xz_squared );
+						ground_dir[X]	= ground_dir[X] * multiple;
+						ground_dir[Y]	= -0.65f;
+						ground_dir[Z]	= ground_dir[Z] * multiple;
+					}
+					else
+					{
+						// Light is straight down — pick arbitrary horizontal to avoid divide-by-zero.
+						ground_dir[X]	= 0.76f;   // sqrt(0.5775)
+						ground_dir[Y]	= -0.65f;
+						ground_dir[Z]	= 0.0f;
+					}
+				}
 			}
 		}
 	}

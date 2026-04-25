@@ -1,6 +1,7 @@
 #include <Gfx/NxLight.h>
 #include <Gfx/debuggfx.h>
 #include <Gfx/debuggfx.h>
+#include <Gfx/FrameDiag.h>
 #include <Gel/Scripting/symboltable.h>
 #include "nx_init.h"
 #include "instance.h"
@@ -108,6 +109,26 @@ void render_instance( CInstance* p_instance, uint32 flags )
 
 		if( render )
 		{
+			// Self-shadow exclusion: main pass only. During shadow caster pass
+			// render_shadow_targets() sets SCENE_FLAG_SELF_SHADOWS on every
+			// caster instance's scene (render.cpp:2269). Use that flag here to
+			// skip shadow-texture sampling on the caster during main pass, so
+			// the skater is not darkened by his own silhouette.
+			const bool is_caster = ( !EngineGlobals.rendering_shadow_caster
+			                         && p_instance->GetScene()
+			                         && (p_instance->GetScene()->m_flags & SCENE_FLAG_SELF_SHADOWS) );
+			if( is_caster ) EngineGlobals.rendering_caster_instance = true;
+
+			{
+				static int s_inst_log = 0;
+				if( (s_inst_log++ % 600) == 0 ) {
+					FILE *f = FrameDiag::OpenShadow();
+					if (f) { fprintf(f, "INST render p=%p scene=%p is_caster=%d shadow_caster_pass=%d\n",
+						(void*)p_instance, (void*)p_instance->GetScene(), (int)is_caster,
+						(int)EngineGlobals.rendering_shadow_caster); fclose(f); }
+				}
+			}
+
 			if( p_instance->GetBoneTransforms() != nullptr )
 			{
 				startup_weighted_mesh_vertex_shader();
@@ -118,6 +139,8 @@ void render_instance( CInstance* p_instance, uint32 flags )
 			{
 				p_instance->Render( vRENDER_OPAQUE | vRENDER_SEMITRANSPARENT );
 			}
+
+			if( is_caster ) EngineGlobals.rendering_caster_instance = false;
 		}
 
 		// Restore world transform to identity.
@@ -148,7 +171,7 @@ void render_instances( uint32 flags )
 	int total = 0, active = 0, included = 0;
 	if (diag)
 	{
-		FILE *df = fopen("shadow_diag.log", "a");
+		FILE *df = FrameDiag::OpenShadow();
 		if (df)
 		{
 			fprintf(df, "== render_instances flags=0x%x ==\n", flags);
@@ -195,7 +218,7 @@ void render_instances( uint32 flags )
 			}
 			if (diag && p_instance->GetModel())
 			{
-				FILE *df = fopen("shadow_diag.log", "a");
+				FILE *df = FrameDiag::OpenShadow();
 				if (df)
 				{
 					fprintf(df, "  inst %p scn=%p meshes=%d semi=%d pass_ok=%d active=%d\n",
@@ -210,7 +233,7 @@ void render_instances( uint32 flags )
 	}
 	if (diag)
 	{
-		FILE *df = fopen("shadow_diag.log", "a");
+		FILE *df = FrameDiag::OpenShadow();
 		if (df)
 		{
 			fprintf(df, "render_instances result flags=0x%x: total=%d active=%d included=%d\n", flags, total, active, included);
@@ -233,7 +256,18 @@ void render_instances( uint32 flags )
 				break;
 
 			if(( flags & vRENDER_OPAQUE ) || (( flags & vRENDER_SEMITRANSPARENT ) && ( flags & vRENDER_INSTANCE_PRE_WORLD_SEMITRANSPARENT )))
+			{
+				// Self-shadow exclusion: skater scenes carry SCENE_FLAG_SELF_SHADOWS
+				// from render_shadow_targets (render.cpp:2269). While drawing those
+				// instances in the main pass, skip shadow-texture sampling so the
+				// caster is not darkened by its own silhouette.
+				const bool is_caster = ( !EngineGlobals.rendering_shadow_caster
+				                         && p_instances[i]->GetScene()
+				                         && (p_instances[i]->GetScene()->m_flags & SCENE_FLAG_SELF_SHADOWS) );
+				if( is_caster ) EngineGlobals.rendering_caster_instance = true;
 				p_instances[i]->Render( flags );
+				if( is_caster ) EngineGlobals.rendering_caster_instance = false;
+			}
 		}
 		shutdown_weighted_mesh_vertex_shader();
 		
@@ -260,13 +294,18 @@ void render_instances( uint32 flags )
 
 			if(( flags & vRENDER_OPAQUE ) || (( flags & vRENDER_SEMITRANSPARENT ) && ( flags & vRENDER_INSTANCE_POST_WORLD_SEMITRANSPARENT )))
 			{
+				const bool is_caster = ( !EngineGlobals.rendering_shadow_caster
+				                         && p_instances[i]->GetScene()
+				                         && (p_instances[i]->GetScene()->m_flags & SCENE_FLAG_SELF_SHADOWS) );
+				if( is_caster ) EngineGlobals.rendering_caster_instance = true;
 				p_instances[i]->Render( flags );
+				if( is_caster ) EngineGlobals.rendering_caster_instance = false;
 				++rendered_nobone;
 			}
 		}
 		if (diag)
 		{
-			FILE *df = fopen("shadow_diag.log", "a");
+			FILE *df = FrameDiag::OpenShadow();
 			if (df)
 			{
 				fprintf(df, "  nobone rendered=%d (flags=0x%x)\n", rendered_nobone, flags);
@@ -483,7 +522,7 @@ void CInstance::Render( uint32 flags )
 				if ((s_sh_count++ & 255) == 0)
 				{
 					Mth::Vector pos = GetTransform()->GetPos();
-					FILE *df = fopen("shadow_diag.log", "a");
+					FILE *df = FrameDiag::OpenShadow();
 					if (df)
 					{
 						fprintf(df, "INST::Render SHADOW-like flags=0x%x pos=(%.1f,%.1f,%.1f) scn=%p mesh=%p\n",

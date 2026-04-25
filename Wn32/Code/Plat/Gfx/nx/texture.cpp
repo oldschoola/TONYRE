@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <Sys/File/filesys.h>
+#include <Gfx/FrameDiag.h>
 #include "nx_init.h"
 #include "chars.h"
 #include "texture.h"
@@ -119,12 +120,12 @@ bool sTexture::SetRenderTarget( int width, int height, int depth, int z_depth )
 
 	if (status != GL_FRAMEBUFFER_COMPLETE)
 	{
-		FILE *f = fopen("shadow_diag.log", "a");
+		FILE *f = FrameDiag::OpenShadow();
 		if (f) { fprintf(f, "SetRenderTarget: FBO incomplete status=0x%x\n", status); fclose(f); }
 		return false;
 	}
 
-	FILE *f = fopen("shadow_diag.log", "a");
+	FILE *f = FrameDiag::OpenShadow();
 	if (f) { fprintf(f, "SetRenderTarget: w=%d h=%d tex=%u fbo=%u rbo=%u OK\n", width, height, GLTexture, GLFramebuffer, GLDepthRenderbuffer); fclose(f); }
 	return true;
 }

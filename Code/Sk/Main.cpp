@@ -126,6 +126,7 @@ int		gameplay_time = 0;
 
 
 bool	skip_startup = false;
+bool	gAutoloadLevel = false;
 
 /*****************************************************************************
 **								DBG Information								**
@@ -444,9 +445,13 @@ int main ( sint argc, char** argv )
 //	snDebugInit();
 //	snProfInit(_4KHZ, profdata, sizeof(profdata));
 
-	if (argc == 2 && strcmp(argv[1],"demo") == 0)
+	if (argc >= 2 && (strcmp(argv[1],"demo") == 0 || strcmp(argv[1],"--autoload") == 0))
 	{
 		skip_startup = true;
+	}
+	if (argc >= 2 && strcmp(argv[1],"--autoload") == 0)
+	{
+		gAutoloadLevel = true;
 	}
 	
 	

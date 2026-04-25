@@ -4,6 +4,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <Gfx/FrameDiag.h>
 #include "nx_init.h"
 #include "texture.h"
 #include "scene.h"
@@ -627,7 +628,7 @@ void sMesh::Submit( void )
 	{
 		if (g_diag_semi_pass && mp_material)
 		{
-			FILE *df = fopen("shadow_diag.log", "a");
+			FILE *df = FrameDiag::OpenShadow();
 			if (df)
 			{
 				uint32 blend_mode = mp_material->m_reg_alpha[0] & 0x3F;
@@ -754,20 +755,24 @@ void sMesh::Submit( void )
 	}
 
 	// Send MVP matrix
-	glUniformMatrix4fv(glGetUniformLocation(shader->program, "u_m"), 1, GL_FALSE, &EngineGlobals.model_matrix[0][0]);
-	glUniformMatrix4fv(glGetUniformLocation(shader->program, "u_v"), 1, GL_FALSE, &EngineGlobals.view_matrix[0][0]);
-	glUniformMatrix4fv(glGetUniformLocation(shader->program, "u_p"), 1, GL_FALSE, &EngineGlobals.projection_matrix[0][0]);
+	if (shader->loc_u_m >= 0) glUniformMatrix4fv(shader->loc_u_m, 1, GL_FALSE, &EngineGlobals.model_matrix[0][0]);
+	if (shader->loc_u_v >= 0) glUniformMatrix4fv(shader->loc_u_v, 1, GL_FALSE, &EngineGlobals.view_matrix[0][0]);
+	if (shader->loc_u_p >= 0) glUniformMatrix4fv(shader->loc_u_p, 1, GL_FALSE, &EngineGlobals.projection_matrix[0][0]);
 
 	// Detailed shadow (projected texture) uniforms.  render_shadow_targets_gl
 	// publishes the projector state into EngineGlobals.shadow_* each frame.
-	glUniformMatrix4fv(glGetUniformLocation(shader->program, "u_tex_proj"), 1, GL_FALSE, &EngineGlobals.shadow_tex_proj_matrix[0][0]);
-	GLint loc_enabled = glGetUniformLocation(shader->program, "u_shadow_enabled");
-	GLint loc_origin  = glGetUniformLocation(shader->program, "u_shadow_origin");
-	GLint loc_near    = glGetUniformLocation(shader->program, "u_shadow_fade_near");
-	GLint loc_far     = glGetUniformLocation(shader->program, "u_shadow_fade_far");
-	GLint loc_tex     = glGetUniformLocation(shader->program, "u_shadow_tex");
+	if (shader->loc_u_tex_proj >= 0)
+		glUniformMatrix4fv(shader->loc_u_tex_proj, 1, GL_FALSE, &EngineGlobals.shadow_tex_proj_matrix[0][0]);
+	const GLint loc_enabled = shader->loc_u_shadow_enabled;
+	const GLint loc_origin  = shader->loc_u_shadow_origin;
+	const GLint loc_near    = shader->loc_u_shadow_fade_near;
+	const GLint loc_far     = shader->loc_u_shadow_fade_far;
+	const GLint loc_tex     = shader->loc_u_shadow_tex;
 
-	const bool scene_receives_shadow = EngineGlobals.shadow_enabled && !(m_flags & MESH_FLAG_NO_SKATER_SHADOW);
+	const bool scene_receives_shadow =
+	    EngineGlobals.shadow_enabled
+	    && !(m_flags & MESH_FLAG_NO_SKATER_SHADOW)
+	    && !EngineGlobals.rendering_caster_instance;  // don't self-shadow the caster
 	if (scene_receives_shadow && loc_tex >= 0 && EngineGlobals.shadow_texture_id != 0)
 	{
 		glActiveTexture(GL_TEXTURE0 + 7);
@@ -795,7 +800,8 @@ void sMesh::Submit( void )
 	else
 	{
 		// Send material colors
-		glUniform4fv(glGetUniformLocation(shader->program, "u_col"), mp_material->m_passes, mp_material->m_color[0]);
+		if (shader->loc_u_col >= 0)
+			glUniform4fv(shader->loc_u_col, mp_material->m_passes, mp_material->m_color[0]);
 	}
 
 	// Setup blend mode
@@ -940,7 +946,7 @@ void sMesh::Submit( void )
 		static int s_shadow_draw_count = 0;
 		if ((s_shadow_draw_count++ & 127) == 0)
 		{
-			FILE *f = fopen("shadow_diag.log", "a");
+			FILE *f = FrameDiag::OpenShadow();
 			if (f)
 			{
 				GLuint tex0 = (mp_material->mp_tex[0] ? mp_material->mp_tex[0]->GLTexture : 0);
@@ -1746,7 +1752,7 @@ void sMesh::Initialize( uint32 num_vertices,
 		// Diag: log tiny meshes (shadow candidates)
 		if ((max_index - min_index) < 8)
 		{
-			FILE *df = fopen("shadow_diag.log", "a");
+			FILE *df = FrameDiag::OpenShadow();
 			if (df)
 			{
 				fprintf(df, "VBO build: mesh=%p verts=%d first_col=0x%08x (R=%d G=%d B=%d A=%d)\n",
@@ -1762,7 +1768,7 @@ void sMesh::Initialize( uint32 num_vertices,
 		// Diag: tiny mesh with no colors
 		if ((max_index - min_index) < 8)
 		{
-			FILE *df = fopen("shadow_diag.log", "a");
+			FILE *df = FrameDiag::OpenShadow();
 			if (df)
 			{
 				fprintf(df, "VBO build: mesh=%p verts=%d NO vertex colors\n",

@@ -123,6 +123,7 @@ out vec2 f_uv[4];
 out vec4 f_col;
 out vec4 f_shadow_uv;
 out vec3 f_wpos;
+out vec3 f_nor;
 
 uniform mat4 u_m;
 uniform mat4 u_v;
@@ -141,6 +142,7 @@ void main()
 
 	f_shadow_uv = u_tex_proj * wpos;
 	f_wpos = wpos.xyz;
+	f_nor = nor;
 
 	gl_Position = pos;
 
@@ -179,6 +181,7 @@ out vec2 f_uv[4];
 out vec4 f_col;
 out vec4 f_shadow_uv;
 out vec3 f_wpos;
+out vec3 f_nor;
 
 uniform mat4 u_m;
 uniform mat4 u_v;
@@ -215,6 +218,7 @@ void main()
 
 	f_shadow_uv = u_tex_proj * wpos;
 	f_wpos = wpos.xyz;
+	f_nor = nor;
 
 	gl_Position = pos;
 
@@ -265,6 +269,7 @@ in vec2 f_uv[4];
 in vec4 f_col;
 in vec4 f_shadow_uv;
 in vec3 f_wpos;
+in vec3 f_nor;
 
 layout (location = 0) out vec4 o_col;
 
@@ -384,6 +389,9 @@ void main()
 	// The caster pass writes alpha=1 wherever the caster silhouette is; alpha=0 elsewhere.
 	// u_shadow_enabled is 0 when the caller does not want shadow modulation
 	// (e.g. shadow receivers disabled, or when rendering the caster itself).
+	// Projector is top-down ortho, so its silhouette texture hits any surface the
+	// ray crosses — including adjacent walls. Gate by surface-up dot so walls
+	// (normal ~horizontal) don't receive the shadow copy. Floors keep it full.
 	if (u_shadow_enabled != 0 && (u_pass_flag[0] & MATFLAG_SHADOW) == 0u)
 	{
 		vec3 s = f_shadow_uv.xyz / max(f_shadow_uv.w, 0.0001f);
@@ -395,7 +403,15 @@ void main()
 			float shadow_mask = texture(u_shadow_tex, s.xy).a;
 			float dist = distance(f_wpos, u_shadow_origin);
 			float fade = 1.0 - smoothstep(u_shadow_fade_near, u_shadow_fade_far, dist);
-			r0.rgb *= mix(vec3(1.0), vec3(0.35), shadow_mask * fade);
+			// Only kill shadow on near-vertical walls (n dot UP ≈ 0). Floors
+			// and slopes (dot > ~0.3, ≤ 72° from up) get full shadow. Previous
+			// smoothstep(0.3, 0.7) cut off slopes and flickered off ground tris
+			// with slight normal variance after interpolation.
+			vec3 n = f_nor;
+			float nl = length(n);
+			float up_dot = (nl > 0.001) ? max(n.y / nl, 0.0) : 1.0;
+			float surface_factor = smoothstep(0.1, 0.3, up_dot);
+			r0.rgb *= mix(vec3(1.0), vec3(0.35), shadow_mask * fade * surface_factor);
 		}
 	}
 
@@ -464,12 +480,28 @@ void main()
 		glUseProgram(program);
 		for (int i = 0; i < 4; i++)
 			glUniform1i(glGetUniformLocation(program, ("u_texture[" + std::to_string(i) + "]").c_str()), i);
+
+		ResolveCachedUniforms();
 	}
 
 	sShader::~sShader()
 	{
 		// Delete program
 		glDeleteProgram(program);
+	}
+
+	void sShader::ResolveCachedUniforms()
+	{
+		loc_u_m                = glGetUniformLocation(program, "u_m");
+		loc_u_v                = glGetUniformLocation(program, "u_v");
+		loc_u_p                = glGetUniformLocation(program, "u_p");
+		loc_u_col              = glGetUniformLocation(program, "u_col");
+		loc_u_tex_proj         = glGetUniformLocation(program, "u_tex_proj");
+		loc_u_shadow_enabled   = glGetUniformLocation(program, "u_shadow_enabled");
+		loc_u_shadow_origin    = glGetUniformLocation(program, "u_shadow_origin");
+		loc_u_shadow_fade_near = glGetUniformLocation(program, "u_shadow_fade_near");
+		loc_u_shadow_fade_far  = glGetUniformLocation(program, "u_shadow_fade_far");
+		loc_u_shadow_tex       = glGetUniformLocation(program, "u_shadow_tex");
 	}
 
 	// Shader programs
