@@ -126,6 +126,7 @@ int		gameplay_time = 0;
 
 
 bool	skip_startup = false;
+bool	gAutoloadLevel = false;
 
 /*****************************************************************************
 **								DBG Information								**
@@ -174,6 +175,49 @@ Dbg_DefineProject( PS2, "Test Project" )
 
 #ifdef __PLAT_WN32__
 #include <shellapi.h>
+#include <windows.h>
+
+static LONG WINAPI CrashHandler( EXCEPTION_POINTERS *ep )
+{
+	FILE *f = fopen( "crash.log", "w" );
+	if ( f )
+	{
+		EXCEPTION_RECORD *er = ep->ExceptionRecord;
+		fprintf( f, "CRASH code=0x%08lx addr=%p flags=0x%lx\n",
+			er->ExceptionCode,
+			er->ExceptionAddress,
+			er->ExceptionFlags );
+
+		HMODULE mod = nullptr;
+		if ( GetModuleHandleExA(
+				GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+				(LPCSTR)er->ExceptionAddress, &mod ))
+		{
+			char name[MAX_PATH] = {0};
+			GetModuleFileNameA( mod, name, MAX_PATH );
+			fprintf( f, "module=%s base=%p offset=0x%llx\n",
+				name, (void*)mod,
+				(unsigned long long)((uintptr_t)er->ExceptionAddress - (uintptr_t)mod) );
+		}
+
+		for ( DWORD i = 0; i < er->NumberParameters && i < 4; ++i )
+			fprintf( f, "  param[%lu]=0x%llx\n", i, (unsigned long long)er->ExceptionInformation[i] );
+
+		CONTEXT *ctx = ep->ContextRecord;
+		fprintf( f, "RIP=%p RSP=%p RBP=%p\n",
+			(void*)(uintptr_t)ctx->Rip,
+			(void*)(uintptr_t)ctx->Rsp,
+			(void*)(uintptr_t)ctx->Rbp );
+		fprintf( f, "RAX=%p RBX=%p RCX=%p RDX=%p\n",
+			(void*)(uintptr_t)ctx->Rax,
+			(void*)(uintptr_t)ctx->Rbx,
+			(void*)(uintptr_t)ctx->Rcx,
+			(void*)(uintptr_t)ctx->Rdx );
+
+		fclose( f );
+	}
+	return EXCEPTION_EXECUTE_HANDLER;
+}
 
 int WINAPI WinMain( HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow )
 {
@@ -181,6 +225,8 @@ int WINAPI WinMain( HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 	(void)hPrevInstance;
 	(void)lpCmdLine;
 	(void)nCmdShow;
+
+	SetUnhandledExceptionFilter( CrashHandler );
 
 	// Get argc and argv
 	int argc;
@@ -399,9 +445,13 @@ int main ( sint argc, char** argv )
 //	snDebugInit();
 //	snProfInit(_4KHZ, profdata, sizeof(profdata));
 
-	if (argc == 2 && strcmp(argv[1],"demo") == 0)
+	if (argc >= 2 && (strcmp(argv[1],"demo") == 0 || strcmp(argv[1],"--autoload") == 0))
 	{
 		skip_startup = true;
+	}
+	if (argc >= 2 && strcmp(argv[1],"--autoload") == 0)
+	{
+		gAutoloadLevel = true;
 	}
 	
 	

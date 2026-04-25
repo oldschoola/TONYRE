@@ -1,6 +1,7 @@
 #include <Gfx/NxLight.h>
 #include <Gfx/debuggfx.h>
 #include <Gfx/debuggfx.h>
+#include <Gfx/FrameDiag.h>
 #include <Gel/Scripting/symboltable.h>
 #include "nx_init.h"
 #include "instance.h"
@@ -8,6 +9,8 @@
 #include "render.h"
 #include "occlude.h"
 #include "anim_vertdefs.h"
+
+bool g_diag_semi_pass = false;
 
 namespace NxWn32
 {
@@ -106,6 +109,26 @@ void render_instance( CInstance* p_instance, uint32 flags )
 
 		if( render )
 		{
+			// Self-shadow exclusion: main pass only. During shadow caster pass
+			// render_shadow_targets() sets SCENE_FLAG_SELF_SHADOWS on every
+			// caster instance's scene (render.cpp:2269). Use that flag here to
+			// skip shadow-texture sampling on the caster during main pass, so
+			// the skater is not darkened by his own silhouette.
+			const bool is_caster = ( !EngineGlobals.rendering_shadow_caster
+			                         && p_instance->GetScene()
+			                         && (p_instance->GetScene()->m_flags & SCENE_FLAG_SELF_SHADOWS) );
+			if( is_caster ) EngineGlobals.rendering_caster_instance = true;
+
+			{
+				static int s_inst_log = 0;
+				if( (s_inst_log++ % 600) == 0 ) {
+					FILE *f = FrameDiag::OpenShadow();
+					if (f) { fprintf(f, "INST render p=%p scene=%p is_caster=%d shadow_caster_pass=%d\n",
+						(void*)p_instance, (void*)p_instance->GetScene(), (int)is_caster,
+						(int)EngineGlobals.rendering_shadow_caster); fclose(f); }
+				}
+			}
+
 			if( p_instance->GetBoneTransforms() != nullptr )
 			{
 				startup_weighted_mesh_vertex_shader();
@@ -116,6 +139,8 @@ void render_instance( CInstance* p_instance, uint32 flags )
 			{
 				p_instance->Render( vRENDER_OPAQUE | vRENDER_SEMITRANSPARENT );
 			}
+
+			if( is_caster ) EngineGlobals.rendering_caster_instance = false;
 		}
 
 		// Restore world transform to identity.
@@ -137,44 +162,83 @@ void render_instances( uint32 flags )
 
 	Mth::Matrix t;
 	t.Identity();
-	
+
 	// Seed the static pointer off to nullptr, otherwise if there is only one object with bone transforms, it will never update.
 	pLastBoneTransforms = nullptr;
-	
+
+	static int s_diag_frame = 0;
+	bool diag = ((s_diag_frame++ & 127) == 0);
+	int total = 0, active = 0, included = 0;
+	if (diag)
+	{
+		FILE *df = FrameDiag::OpenShadow();
+		if (df)
+		{
+			fprintf(df, "== render_instances flags=0x%x ==\n", flags);
+			fclose(df);
+		}
+	}
+
 	// First go through and build a list of the visible instances.
 	CInstance *p_instance = pFirstInstance;
 	while( p_instance )
 	{
+		++total;
 		if( p_instance->GetActive())
 		{
+			++active;
 			// Check to see whether this instance is of the type we want to render - opaque or semitransparent.
-			if((( flags & vRENDER_OPAQUE ) && ( p_instance->GetScene()->m_num_mesh_entries > p_instance->GetScene()->m_num_semitransparent_mesh_entries )) ||
-			   (( flags & vRENDER_SEMITRANSPARENT ) && ( p_instance->GetScene()->m_num_semitransparent_mesh_entries > 0 )))
+			sScene *p_scn = p_instance->GetScene();
+			bool pass_ok = ( (( flags & vRENDER_OPAQUE ) && ( p_scn->m_num_mesh_entries > p_scn->m_num_semitransparent_mesh_entries )) ||
+				             (( flags & vRENDER_SEMITRANSPARENT ) && ( p_scn->m_num_semitransparent_mesh_entries > 0 )) );
+			if( pass_ok )
 			{
 				// Check whether this instance is visible - if so, place it in the visible array.
 				t.SetPos( p_instance->GetTransform()->GetPos());
 				set_frustum_bbox_transform( &t );
-				
+
 				// For skinned objects, we have no idea how the skeleton transforms will be affecting the final position of each object.
 				// This can sometimes result in small objects getting culled incorrectly. For these objects, increase the size of
 				// the bounding sphere slightly.
-				float radius = p_instance->GetScene()->m_sphere_radius;
-				if( p_instance->GetBoneTransforms() && ( p_instance->GetScene()->m_numHierarchyObjects == 0 ))
+				float radius = p_scn->m_sphere_radius;
+				if( p_instance->GetBoneTransforms() && ( p_scn->m_numHierarchyObjects == 0 ))
 				{
 					radius = ( radius < 72.0f ) ? 72.0f : radius;
 				}
-				
+
 				// The logic code already sets the active flag based on visibility, so there is no need to perform a second visibility check
 				// at this point.
 				// We do, however, want to test against occluders.
-				if( !TestSphereAgainstOccluders(p_instance->GetScene()->m_sphere_center, radius))
+				if( !TestSphereAgainstOccluders(p_scn->m_sphere_center, radius))
 				{
 					Dbg_Assert( current_index < INSTANCE_ARRAY_SIZE );
 					p_instances[current_index++] = p_instance;
+					++included;
+				}
+			}
+			if (diag && p_instance->GetModel())
+			{
+				FILE *df = FrameDiag::OpenShadow();
+				if (df)
+				{
+					fprintf(df, "  inst %p scn=%p meshes=%d semi=%d pass_ok=%d active=%d\n",
+						p_instance, p_scn, p_scn ? p_scn->m_num_mesh_entries : -1,
+						p_scn ? p_scn->m_num_semitransparent_mesh_entries : -1,
+						(int)pass_ok, (int)p_instance->GetActive());
+					fclose(df);
 				}
 			}
 		}
 		p_instance = p_instance->GetNextInstance();
+	}
+	if (diag)
+	{
+		FILE *df = FrameDiag::OpenShadow();
+		if (df)
+		{
+			fprintf(df, "render_instances result flags=0x%x: total=%d active=%d included=%d\n", flags, total, active, included);
+			fclose(df);
+		}
 	}
 
 	// Now sort the list based on bone transform and number of semitransparent objects in scene.
@@ -192,7 +256,18 @@ void render_instances( uint32 flags )
 				break;
 
 			if(( flags & vRENDER_OPAQUE ) || (( flags & vRENDER_SEMITRANSPARENT ) && ( flags & vRENDER_INSTANCE_PRE_WORLD_SEMITRANSPARENT )))
+			{
+				// Self-shadow exclusion: skater scenes carry SCENE_FLAG_SELF_SHADOWS
+				// from render_shadow_targets (render.cpp:2269). While drawing those
+				// instances in the main pass, skip shadow-texture sampling so the
+				// caster is not darkened by its own silhouette.
+				const bool is_caster = ( !EngineGlobals.rendering_shadow_caster
+				                         && p_instances[i]->GetScene()
+				                         && (p_instances[i]->GetScene()->m_flags & SCENE_FLAG_SELF_SHADOWS) );
+				if( is_caster ) EngineGlobals.rendering_caster_instance = true;
 				p_instances[i]->Render( flags );
+				if( is_caster ) EngineGlobals.rendering_caster_instance = false;
+			}
 		}
 		shutdown_weighted_mesh_vertex_shader();
 		
@@ -208,6 +283,7 @@ void render_instances( uint32 flags )
 		float env_map_disable_distance	= Script::GetFloat( Crc::ConstCRC( "EnvMapDisableDistance")) * 12.0f;
 		env_map_disable_distance		= env_map_disable_distance * env_map_disable_distance;
 
+		int rendered_nobone = 0;
 		for( ; i < current_index; ++i )
 		{
 			// Calculate the distance from the current camera to the instance.
@@ -217,7 +293,24 @@ void render_instances( uint32 flags )
 			// EngineGlobals.allow_envmapping = ( dist_squared > env_map_disable_distance ) ? false : true;
 
 			if(( flags & vRENDER_OPAQUE ) || (( flags & vRENDER_SEMITRANSPARENT ) && ( flags & vRENDER_INSTANCE_POST_WORLD_SEMITRANSPARENT )))
+			{
+				const bool is_caster = ( !EngineGlobals.rendering_shadow_caster
+				                         && p_instances[i]->GetScene()
+				                         && (p_instances[i]->GetScene()->m_flags & SCENE_FLAG_SELF_SHADOWS) );
+				if( is_caster ) EngineGlobals.rendering_caster_instance = true;
 				p_instances[i]->Render( flags );
+				if( is_caster ) EngineGlobals.rendering_caster_instance = false;
+				++rendered_nobone;
+			}
+		}
+		if (diag)
+		{
+			FILE *df = FrameDiag::OpenShadow();
+			if (df)
+			{
+				fprintf(df, "  nobone rendered=%d (flags=0x%x)\n", rendered_nobone, flags);
+				fclose(df);
+			}
 		}
 
 		// Restore environment mapping..
@@ -421,6 +514,28 @@ void CInstance::Render( uint32 flags )
 			set_frustum_bbox_transform(GetTransform());
 			EngineGlobals.model_matrix = *((glm::mat4*)GetTransform());
 
+			sScene *p_scn = GetScene();
+			bool is_shadow_like = (p_scn && p_scn->m_num_mesh_entries == 1 && p_scn->m_num_semitransparent_mesh_entries == 1);
+			if (is_shadow_like)
+			{
+				static int s_sh_count = 0;
+				if ((s_sh_count++ & 255) == 0)
+				{
+					Mth::Vector pos = GetTransform()->GetPos();
+					FILE *df = FrameDiag::OpenShadow();
+					if (df)
+					{
+						fprintf(df, "INST::Render SHADOW-like flags=0x%x pos=(%.1f,%.1f,%.1f) scn=%p mesh=%p\n",
+							flags, pos[X], pos[Y], pos[Z], p_scn, p_scn->m_meshes ? p_scn->m_meshes[0] : nullptr);
+						fclose(df);
+					}
+					::g_diag_semi_pass = true;
+					render_scene( GetScene(), flags | vRENDER_NO_CULLING );
+					::g_diag_semi_pass = false;
+					return;
+				}
+			}
+
 			render_scene( GetScene(), flags | vRENDER_NO_CULLING );
 		}
 	}
@@ -472,27 +587,10 @@ void CInstance::Render( uint32 flags )
 		EngineGlobals.model_matrix = *((glm::mat4*)GetTransform());
 		setup_weighted_mesh_vertex_shader( &root_matrix, &GetBoneTransforms()[0][Mth::RIGHT][X], upload_bone_transforms ? GetNumBones() : 0 );
 
-		if( GetScene()->m_flags & SCENE_FLAG_RENDERING_SHADOW )
-		{
-			// Set the simple vertex shader that does no normal transform or lighting.
-			// set_vertex_shader( WeightedMeshVertexShader_SBWrite );
-			// EngineGlobals.vertex_shader_override = 1;
-
-			// Set the simple pixel shader that just writes constant (1,1,1,1) out.
-			// set_pixel_shader( PixelShaderNULL );
-			// EngineGlobals.pixel_shader_override = 1;
-
-			// No backface culling.
-			// set_render_state( RS_CULLMODE, D3DCULL_NONE );
-
-			// Lock out material changes.
-			// EngineGlobals.material_override = 1;
-
-			// render_scene( GetScene(), flags | vRENDER_NO_CULLING );
-
-//			RenderShadowVolume();
-		}
-		else
+		// Shadow caster pass: mesh.cpp Submit() has a fast path that swaps to
+		// ShadowCasterShader when EngineGlobals.rendering_shadow_caster is set,
+		// so we just render the scene the normal way and let the mesh path
+		// do the substitution.
 		{
 			render_scene( GetScene(), flags | vRENDER_NO_CULLING );
 

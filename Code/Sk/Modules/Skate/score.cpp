@@ -384,6 +384,52 @@ void Score::Update()
 	}
 	p_special_bar->SetRGBA(special_rgba);
 
+	// Hide score + special bar while any conversation box is on screen. THUG
+	// NPC talk uses `speech_box_anchor` (create_speech_box) or a custom anchor
+	// like `goal_start_dialog` (goal ped intro). Front-end menus use
+	// `dialog_box_anchor`. Probe all three — cheaper than routing state through
+	// scripting.
+	{
+		const uint32 dialog_anchor_ids[] =
+		{
+			Crc::ConstCRC("ped_speech_dialog"),        // NPC convo (Eric etc.)
+			Crc::ConstCRC("speech_box_anchor"),        // generic speech box
+			Crc::ConstCRC("goal_start_dialog"),        // goal intro
+			Crc::ConstCRC("goal_description_anchor"),  // goal description
+			Crc::ConstCRC("goal_retry_anchor"),        // goal retry
+			Crc::ConstCRC("dialog_box_anchor"),        // front-end dialog
+		};
+		bool dialog_active = false;
+		for( uint32 id : dialog_anchor_ids )
+		{
+			if( p_manager->GetElement( id, Front::CScreenElementManager::DONT_ASSERT ) != nullptr )
+			{
+				dialog_active = true;
+				break;
+			}
+		}
+
+		Script::CStruct toggle_props;
+		toggle_props.AddChecksum( NONAME, dialog_active ? Crc::ConstCRC("hide") : Crc::ConstCRC("unhide") );
+
+		uint32 heap_idx = pSkater ? pSkater->GetHeapIndex() : 0;
+
+		const uint32 ids[] =
+		{
+			Crc::ConstCRC("the_special_bar_sprite")    + heap_idx,
+			Crc::ConstCRC("the_score")                 + heap_idx,
+			Crc::ConstCRC("the_special_bar")           + heap_idx,
+			Crc::ConstCRC("the_special_bar_back")      + heap_idx,
+			Crc::ConstCRC("the_score_back")            + heap_idx,
+		};
+		for( uint32 id : ids )
+		{
+			Front::CScreenElementPtr p_elem = p_manager->GetElement( id, Front::CScreenElementManager::DONT_ASSERT );
+			if( p_elem )
+				p_elem->SetProperties( &toggle_props );
+		}
+	}
+
 	/*
 	HUD::PanelMgr* panel_mgr = HUD::PanelMgr::Instance();
 	HUD::Panel* panel;

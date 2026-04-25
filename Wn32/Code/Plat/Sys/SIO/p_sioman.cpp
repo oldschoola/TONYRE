@@ -30,10 +30,13 @@
 #include <Sys/sioman.h>
 #include <Sys/siodev.h>
 #include <Sys/SIO/keyboard.h>
+#include <Sys/timer.h>
 
 #include <Gel/module.h>
 
 #include <Gel/Music/music.h>
+
+#include "DualSense/DualSense_Pump.h"
 
 /*****************************************************************************
 **								DBG Information								**
@@ -81,6 +84,10 @@ void Manager::process_devices(const Tsk::Task< Manager::DeviceList > &task)
 	Lst::Search< Device >	    sh;
 	Manager::DeviceList&	device_list = task.GetData();
 
+	// Drive DualSense plug-and-play + apply pending output defaults before
+	// any per-device read runs.
+	DualSensePump::Tick(Tmr::FrameLength());
+
 	device = sh.FirstItem ( device_list );
 
 	while ( device )
@@ -123,6 +130,10 @@ Manager::Manager ( void )
 {
 	// Initialize SDL
 	Dbg_MsgAssert(SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_JOYSTICK | SDL_INIT_GAMECONTROLLER | SDL_INIT_HAPTIC) == 0, ("Failed to initialize SDL: %s", SDL_GetError()));
+
+	// Install the HID policy + build the DualSense/DualShock registry. Must
+	// run before any Device calls its read_data().
+	DualSensePump::Init();
 
 	m_process_devices_task = new Tsk::Task< DeviceList >(Manager::process_devices, m_devices);
 
@@ -226,6 +237,8 @@ Manager::~Manager( void )
 	KeyboardDeinit();
 #	endif
 
+	DualSensePump::Shutdown();
+
 	Dbg_Message( "Shut down IOP Controller Lib\n" );
 }
 
@@ -240,6 +253,8 @@ void Manager::ProcessDevices( void )
 	Device*					device;
 	Lst::Search< Device >	sh;
 	Manager::DeviceList&	device_list = m_devices;
+
+	DualSensePump::Tick(Tmr::FrameLength());
 
 	device = sh.FirstItem( device_list );
 

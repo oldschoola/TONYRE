@@ -962,6 +962,26 @@ bool CGeom::EnableShadow( bool enabled )
 /*                                                                */
 /******************************************************************/
 
+void CGeom::ForceAlphaFromTexture()
+{
+	plat_force_alpha_from_texture();
+}
+
+/******************************************************************/
+/*                                                                */
+/*                                                                */
+/******************************************************************/
+
+void CGeom::plat_force_alpha_from_texture()
+{
+	// Stub. Platform-specific override in p_NxGeom.cpp.
+}
+
+/******************************************************************/
+/*                                                                */
+/*                                                                */
+/******************************************************************/
+
 size_t CGeom::GetNumRenderVerts()								// - returns number of renderable verts
 {
 		return plat_get_num_render_verts();

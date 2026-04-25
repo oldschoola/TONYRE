@@ -1,5 +1,9 @@
 #include <SDL.h>
 
+#include <windows.h>
+#include <timeapi.h>
+#pragma comment(lib, "winmm.lib")
+
 #include "Sys/Config/config.h"
 #include "nx_init.h"
 #include "sprite.h"
@@ -12,6 +16,11 @@
 #include "grass.h"
 #include "shader.h"
 
+#if defined(DEBUG_IMGUI)
+#include "Plugins/ImGui/ImGuiLayer.h"
+#include "Plugins/ImGui/Panels/PerformancePanel.h"
+#endif
+
 namespace NxWn32
 {
 
@@ -23,31 +32,119 @@ sEngineGlobals	EngineGlobals;
 /*                                                                */
 /******************************************************************/
 
-static double s_next_frame;
-static constexpr double c_frame_time = 1000.0 / 60.0;
+// 60 Hz target. Pacing uses QPC for sub-millisecond precision and a
+// high-resolution waitable timer (Windows 10 1803+) so the wait wakes within
+// ~100 us of the deadline instead of the ~1 ms granularity SDL_Delay yields.
+// This eliminates the ±1 ms jitter that produced the 15 → 17 ms periodic
+// drops the perf panel was showing.
+static LONGLONG	s_qpc_freq = 0;			// QPC ticks per second
+static LONGLONG	s_qpc_per_frame = 0;	// ticks per 60 Hz frame
+static LONGLONG	s_next_frame_qpc = 0;	// QPC tick for next swap deadline
+static HANDLE	s_frame_timer = nullptr;
+
+static void EnsureFrameTimer(void)
+{
+	if (s_qpc_freq == 0)
+	{
+		LARGE_INTEGER f;
+		QueryPerformanceFrequency(&f);
+		s_qpc_freq = f.QuadPart;
+		s_qpc_per_frame = s_qpc_freq / 60;	// 60 Hz target
+
+		LARGE_INTEGER c;
+		QueryPerformanceCounter(&c);
+		s_next_frame_qpc = c.QuadPart + s_qpc_per_frame;
+	}
+
+	if (s_frame_timer == nullptr)
+	{
+		// Try the high-resolution variant first (Win10 1803+). Falls back to
+		// CreateWaitableTimerW which has ~1 ms granularity (same as SDL_Delay).
+		s_frame_timer = CreateWaitableTimerExW(
+			nullptr, nullptr,
+			CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
+			TIMER_ALL_ACCESS);
+		if (s_frame_timer == nullptr)
+		{
+			s_frame_timer = CreateWaitableTimerW(nullptr, FALSE, nullptr);
+		}
+	}
+}
+
+void ApplySwapInterval(int interval)
+{
+	// Adaptive vsync (-1) is supported only on a subset of drivers (mostly NVIDIA);
+	// SDL returns -1 when the driver rejects the value. Fall back to plain vsync-off
+	// in that case so we never leave the swap chain in an undefined state.
+	if (SDL_GL_SetSwapInterval(interval) != 0 && interval == -1)
+		SDL_GL_SetSwapInterval(0);
+}
 
 void WaitForNextFrame(void)
 {
-	// Wait until next frame
-	while (1)
+	EnsureFrameTimer();
+
+#if defined(DEBUG_IMGUI)
+	// Uncap toggle: skip pacing entirely. Reset the deadline so re-engaging the
+	// cap on the next frame doesn't try to "catch up" by rapid-firing frames.
+	if (Debug::PerformancePanel::IsFramerateUncapped())
 	{
-		double now = (double)SDL_GetTicks64();
-		if (now >= s_next_frame)
-		{
-			s_next_frame += c_frame_time;
-			break;
-		}
-		if (now >= s_next_frame + (c_frame_time * 5.0f))
-		{
-			s_next_frame = now + c_frame_time;
-			break;
-		}
-		SDL_Delay(1);
+		LARGE_INTEGER now_uncapped;
+		QueryPerformanceCounter(&now_uncapped);
+		s_next_frame_qpc = now_uncapped.QuadPart + s_qpc_per_frame;
+		return;
 	}
+#endif
+
+	LARGE_INTEGER now;
+	QueryPerformanceCounter(&now);
+
+	// Recover from a long stall (paused under debugger, alt-tab, level
+	// switch). Without this clamp, s_next_frame_qpc would chase forever.
+	const LONGLONG max_drift = s_qpc_per_frame * 5;
+	if (now.QuadPart > s_next_frame_qpc + max_drift)
+	{
+		s_next_frame_qpc = now.QuadPart + s_qpc_per_frame;
+		return;
+	}
+
+	// Sleep until ~250 us before the deadline using the waitable timer, then
+	// spin-wait the remainder. This gives both low CPU usage during the wait
+	// and tight sub-millisecond pacing accuracy at the deadline.
+	LONGLONG remaining = s_next_frame_qpc - now.QuadPart;
+	if (remaining > 0 && s_frame_timer != nullptr)
+	{
+		// Lead time: 250 us in QPC ticks.
+		const LONGLONG lead_ticks = s_qpc_freq / 4000;
+		LONGLONG sleep_ticks = remaining - lead_ticks;
+		if (sleep_ticks > 0)
+		{
+			LARGE_INTEGER due;
+			due.QuadPart = -((sleep_ticks * 10000000) / s_qpc_freq);	// negative = relative, 100 ns units
+			SetWaitableTimer(s_frame_timer, &due, 0, nullptr, nullptr, FALSE);
+			WaitForSingleObject(s_frame_timer, 20);	// 20 ms safety cap
+		}
+	}
+
+	// Spin to the deadline for sub-ms accuracy.
+	for (;;)
+	{
+		QueryPerformanceCounter(&now);
+		if (now.QuadPart >= s_next_frame_qpc) break;
+		YieldProcessor();
+	}
+
+	s_next_frame_qpc += s_qpc_per_frame;
 }
 
 void InitialiseEngine( void )
 {
+	// Raise Windows timer resolution to 1 ms so SDL_Delay(1) in
+	// WaitForNextFrame actually sleeps ~1 ms instead of the default
+	// ~15.6 ms granularity. Without this the frame limiter drifts
+	// frame pacing off 60 Hz even with a fast CPU.
+	timeBeginPeriod(1);
+
 	// Initialize SDL
 	if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER | SDL_INIT_AUDIO) < 0)
 		Dbg_MsgAssert(0, ("Failed to initialize SDL: %s", SDL_GetError()));
@@ -86,14 +183,17 @@ void InitialiseEngine( void )
 	if (!GLAD_GL_VERSION_3_3)
 		Dbg_MsgAssert(0, ("OpenGL 3.3 not supported"));
 
-	// Disable vsync
-	SDL_GL_SetSwapInterval(0);
+	// Vsync default: off (matches the original behaviour). Runtime tuning happens
+	// via Debug::PerformancePanel + ApplySwapInterval.
+	ApplySwapInterval(0);
+
+#if defined(DEBUG_IMGUI)
+	// Bring ImGui context up while GL is fresh. Frame-loop hooks land in Phase 3.
+	Debug::ImGuiLayer::Init(EngineGlobals.window, EngineGlobals.context);
+#endif
 
 	// Initalize 2D render
 	SDraw2D::Init();
-
-	// Initialize frame counter
-	s_next_frame = (double)SDL_GetTicks64();
 
 	// Set screen dimensions
 	set_dimensions(width, height);

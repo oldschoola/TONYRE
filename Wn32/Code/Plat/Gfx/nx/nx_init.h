@@ -21,6 +21,10 @@ void FatalFileError( uint32 error );
 
 void WaitForNextFrame(void);
 
+// Apply a SDL swap interval at runtime. 0 = vsync off, 1 = on, -1 = adaptive.
+// Falls back to 0 if the driver rejects -1 (most non-NVIDIA drivers).
+void ApplySwapInterval(int interval);
+
 struct GlMesh
 {
 	public:
@@ -135,6 +139,25 @@ struct sEngineGlobals
 
 	// Fullscreen quad
 	GlMesh *fullscreen_quad = nullptr;
+
+	// Detailed shadow projection (see render.cpp render_shadow_targets_gl).
+	// Populated every frame by the shadow target pass; consumed by mesh.cpp when
+	// uploading per-draw shadow uniforms.
+	GLuint    shadow_texture_id   = 0;
+	glm::mat4 shadow_tex_proj_matrix = glm::mat4(1.0f);
+	glm::vec3 shadow_origin       = glm::vec3(0.0f);
+	float     shadow_fade_near    = 360.0f;
+	float     shadow_fade_far     = 600.0f;
+	bool      shadow_enabled      = false;
+	bool      rendering_shadow_caster = false;
+
+	// Self-shadow exclusion. `caster_instance` is the CInstance pointer of the
+	// skater (or whoever casts). During the main (receiver) pass, instance.cpp
+	// flips `rendering_caster_instance` around the caster's own draw so mesh.cpp
+	// can skip shadow-texture sampling on it — otherwise the skater darkens
+	// itself with its own silhouette.
+	void*     caster_instance = nullptr;
+	bool      rendering_caster_instance = false;
 
 	/*
 	// XGMATRIX			world_matrix;

@@ -27,6 +27,7 @@
 #include <Core/Defines.h>
 #endif
 #include <Core/singleton.h>
+#include <cstdint>
 #ifdef __PLAT_NGC__
 #include <dolphin.h>
 #endif
@@ -94,7 +95,7 @@ public:
 		vMAX_DISPLAY_FILENAME_LEN	= 63
 	};
 
-					File( int fd, Card* card );
+					File( intptr_t fd, Card* card );
 					~File();
 					
 		
@@ -125,7 +126,7 @@ public:
 #	endif
 
 private:
-	int				m_fd;
+	intptr_t		m_fd;
 	Card*			m_card;
 };
 

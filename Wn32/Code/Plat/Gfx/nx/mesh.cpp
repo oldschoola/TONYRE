@@ -4,6 +4,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <Gfx/FrameDiag.h>
 #include "nx_init.h"
 #include "texture.h"
 #include "scene.h"
@@ -598,6 +599,49 @@ void sMesh::Submit( void )
 	if (m_num_indices[0] == 0)
 		return;
 
+	// Fast path: rendering into the shadow target FBO. Skip material setup,
+	// draw the silhouette with the flat caster shader only. Bones were already
+	// mirrored onto ShadowCasterShader by setup_weighted_mesh_vertex_shader.
+	if (EngineGlobals.rendering_shadow_caster)
+	{
+		sShader *caster = ShadowCasterShader();
+		glUseProgram(caster->program);
+
+		glUniformMatrix4fv(glGetUniformLocation(caster->program, "u_m"), 1, GL_FALSE, &EngineGlobals.model_matrix[0][0]);
+		glUniformMatrix4fv(glGetUniformLocation(caster->program, "u_v"), 1, GL_FALSE, &EngineGlobals.view_matrix[0][0]);
+		glUniformMatrix4fv(glGetUniformLocation(caster->program, "u_p"), 1, GL_FALSE, &EngineGlobals.projection_matrix[0][0]);
+
+		glEnable(GL_DEPTH_TEST);
+		glDepthFunc(GL_LEQUAL);
+		glDepthMask(GL_TRUE);
+		glDisable(GL_BLEND);
+		glDisable(GL_CULL_FACE);
+
+		glBindVertexArray(mp_vao);
+		glBindBuffer(GL_ARRAY_BUFFER, mp_vbo);
+		glDrawElements(GL_TRIANGLE_STRIP, m_num_indices[0], GL_UNSIGNED_SHORT, mp_index_buffer[0]);
+		return;
+	}
+
+	// Diag: dump semi-pass meshes
+	extern bool g_diag_semi_pass;
+	{
+		if (g_diag_semi_pass && mp_material)
+		{
+			FILE *df = FrameDiag::OpenShadow();
+			if (df)
+			{
+				uint32 blend_mode = mp_material->m_reg_alpha[0] & 0x3F;
+				fprintf(df, "  MESH mesh=%p passes=%u blend=%u flags0=0x%x alpha0=0x%x tex0=%p idx=%d col=(%.2f,%.2f,%.2f,%.2f) mflags=0x%x\n",
+					this, mp_material->m_passes, blend_mode, mp_material->m_flags[0], mp_material->m_reg_alpha[0],
+					mp_material->mp_tex[0], m_num_indices[0],
+					mp_material->m_color[0][0], mp_material->m_color[0][1],
+					mp_material->m_color[0][2], mp_material->m_color[0][3], m_flags);
+				fclose(df);
+			}
+		}
+	}
+
 	// Deal with vertex color wibbling.
 	// wibble_vc();
 
@@ -711,9 +755,38 @@ void sMesh::Submit( void )
 	}
 
 	// Send MVP matrix
-	glUniformMatrix4fv(glGetUniformLocation(shader->program, "u_m"), 1, GL_FALSE, &EngineGlobals.model_matrix[0][0]);
-	glUniformMatrix4fv(glGetUniformLocation(shader->program, "u_v"), 1, GL_FALSE, &EngineGlobals.view_matrix[0][0]);
-	glUniformMatrix4fv(glGetUniformLocation(shader->program, "u_p"), 1, GL_FALSE, &EngineGlobals.projection_matrix[0][0]);
+	if (shader->loc_u_m >= 0) glUniformMatrix4fv(shader->loc_u_m, 1, GL_FALSE, &EngineGlobals.model_matrix[0][0]);
+	if (shader->loc_u_v >= 0) glUniformMatrix4fv(shader->loc_u_v, 1, GL_FALSE, &EngineGlobals.view_matrix[0][0]);
+	if (shader->loc_u_p >= 0) glUniformMatrix4fv(shader->loc_u_p, 1, GL_FALSE, &EngineGlobals.projection_matrix[0][0]);
+
+	// Detailed shadow (projected texture) uniforms.  render_shadow_targets_gl
+	// publishes the projector state into EngineGlobals.shadow_* each frame.
+	if (shader->loc_u_tex_proj >= 0)
+		glUniformMatrix4fv(shader->loc_u_tex_proj, 1, GL_FALSE, &EngineGlobals.shadow_tex_proj_matrix[0][0]);
+	const GLint loc_enabled = shader->loc_u_shadow_enabled;
+	const GLint loc_origin  = shader->loc_u_shadow_origin;
+	const GLint loc_near    = shader->loc_u_shadow_fade_near;
+	const GLint loc_far     = shader->loc_u_shadow_fade_far;
+	const GLint loc_tex     = shader->loc_u_shadow_tex;
+
+	const bool scene_receives_shadow =
+	    EngineGlobals.shadow_enabled
+	    && !(m_flags & MESH_FLAG_NO_SKATER_SHADOW)
+	    && !EngineGlobals.rendering_caster_instance;  // don't self-shadow the caster
+	if (scene_receives_shadow && loc_tex >= 0 && EngineGlobals.shadow_texture_id != 0)
+	{
+		glActiveTexture(GL_TEXTURE0 + 7);
+		glBindTexture(GL_TEXTURE_2D, EngineGlobals.shadow_texture_id);
+		glUniform1i(loc_tex, 7);
+		if (loc_enabled >= 0) glUniform1i(loc_enabled, 1);
+	}
+	else
+	{
+		if (loc_enabled >= 0) glUniform1i(loc_enabled, 0);
+	}
+	if (loc_origin >= 0) glUniform3fv(loc_origin, 1, &EngineGlobals.shadow_origin[0]);
+	if (loc_near   >= 0) glUniform1f (loc_near,   EngineGlobals.shadow_fade_near);
+	if (loc_far    >= 0) glUniform1f (loc_far,    EngineGlobals.shadow_fade_far);
 
 	if (m_flags & MESH_FLAG_MATERIAL_COLOR_OVERRIDE)
 	{
@@ -727,7 +800,8 @@ void sMesh::Submit( void )
 	else
 	{
 		// Send material colors
-		glUniform4fv(glGetUniformLocation(shader->program, "u_col"), mp_material->m_passes, mp_material->m_color[0]);
+		if (shader->loc_u_col >= 0)
+			glUniform4fv(shader->loc_u_col, mp_material->m_passes, mp_material->m_color[0]);
 	}
 
 	// Setup blend mode
@@ -862,11 +936,44 @@ void sMesh::Submit( void )
 	glBlendFunc(src_blend, dst_blend);
 	glBlendColor(fixed_alpha, fixed_alpha, fixed_alpha, fixed_alpha);
 
+	// Shadow polygons sit on the ground plane — push them toward the camera to prevent z-fight.
+	const bool is_shadow = (mp_material->m_flags[0] & MATFLAG_SHADOW) != 0;
+	if (is_shadow)
+	{
+		glEnable(GL_POLYGON_OFFSET_FILL);
+		glPolygonOffset(-1.0f, -1.0f);
+
+		static int s_shadow_draw_count = 0;
+		if ((s_shadow_draw_count++ & 127) == 0)
+		{
+			FILE *f = FrameDiag::OpenShadow();
+			if (f)
+			{
+				GLuint tex0 = (mp_material->mp_tex[0] ? mp_material->mp_tex[0]->GLTexture : 0);
+				fprintf(f, "DRAW_SHADOW: call=%d flag0=0x%08x col0=(%.2f,%.2f,%.2f,%.2f) reg_alpha0=0x%08x blend_op=0x%x src=0x%x dst=0x%x fixed_a=%.2f tex0=%u passes=%u indices=%d\n",
+					s_shadow_draw_count,
+					mp_material->m_flags[0],
+					mp_material->m_color[0][0], mp_material->m_color[0][1],
+					mp_material->m_color[0][2], mp_material->m_color[0][3],
+					mp_material->m_reg_alpha[0],
+					(unsigned)blend_op, (unsigned)src_blend, (unsigned)dst_blend,
+					fixed_alpha, tex0, mp_material->m_passes,
+					m_num_indices[lod]);
+				fclose(f);
+			}
+		}
+	}
+
 	// Draw mesh
 	glBindVertexArray(mp_vao);
 	glBindBuffer(GL_ARRAY_BUFFER, mp_vbo);
 
 	glDrawElements(GL_TRIANGLE_STRIP, m_num_indices[lod], GL_UNSIGNED_SHORT, mp_index_buffer[lod]);
+
+	if (is_shadow)
+	{
+		glDisable(GL_POLYGON_OFFSET_FILL);
+	}
 
 	/*
 	DWORD	stage_zero_minfilter;
@@ -1629,14 +1736,45 @@ void sMesh::Initialize( uint32 num_vertices,
 		uint32 *p_out = (uint32*)((char*)p_vbo + (uintptr_t)m_diffuse_offset);
 		uint32 *p_in = p_colors + min_index;
 
+		uint32 first_col = 0;
+		bool got_first = false;
 		for (uint16 v = min_index; v <= max_index; v++)
 		{
 			if (p_mesh_workspace_array[v] == 0)
 			{
 				p_out[0] = p_in[0];
+				if (!got_first) { first_col = p_in[0]; got_first = true; }
 				p_out = (uint32*)((char*)p_out + vertex_size);
 			}
 			p_in++;
+		}
+
+		// Diag: log tiny meshes (shadow candidates)
+		if ((max_index - min_index) < 8)
+		{
+			FILE *df = FrameDiag::OpenShadow();
+			if (df)
+			{
+				fprintf(df, "VBO build: mesh=%p verts=%d first_col=0x%08x (R=%d G=%d B=%d A=%d)\n",
+					this, (max_index - min_index + 1), first_col,
+					(first_col >> 16) & 0xFF, (first_col >> 8) & 0xFF,
+					first_col & 0xFF, (first_col >> 24) & 0xFF);
+				fclose(df);
+			}
+		}
+	}
+	else
+	{
+		// Diag: tiny mesh with no colors
+		if ((max_index - min_index) < 8)
+		{
+			FILE *df = FrameDiag::OpenShadow();
+			if (df)
+			{
+				fprintf(df, "VBO build: mesh=%p verts=%d NO vertex colors\n",
+					this, (max_index - min_index + 1));
+				fclose(df);
+			}
 		}
 	}
 

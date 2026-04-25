@@ -23,6 +23,7 @@
 #include <Gfx/nx.h>
 #include <Gfx/NxModel.h>
 #include <Gfx/NxTextured3dPoly.h>
+#include <Gfx/FrameDiag.h>
 
 namespace Gfx
 {
@@ -39,7 +40,7 @@ CShadow::~CShadow()
 CDetailedShadow::CDetailedShadow(Nx::CModel *p_model, Mth::Vector camera_direction, float camera_distance)
 {
 	m_type=vDETAILED_SHADOW;
-	mp_texture = Nx::CEngine::sCreateRenderTargetTexture( 256, 256, 16, 16 );		// maybe platform dependent?
+	mp_texture = Nx::CEngine::sCreateRenderTargetTexture( 512, 512, 16, 16 );		// 512×512: 2× over original to kill pixelation on walls close to skater.
 	
 	// Note, engine will figure out scene for itself
 	Nx::CEngine::sProjectTextureIntoScene( mp_texture, p_model );		
@@ -165,14 +166,23 @@ void CSimpleShadow::SetModel(const char *p_model_name)
 	{
 		Nx::CEngine::sUninitModel(mp_model);
 		mp_model=nullptr;
-	}	
+	}
 
 	mp_model=Nx::CEngine::sInitModel();
-	
+
 	Dbg_MsgAssert(p_model_name,("nullptr p_model_name"));
-	
+
 	// TODO: Change to use a geom file instead for PS2, more efficient than mdl ...
-	mp_model->AddGeom(Gfx::GetModelFileName(p_model_name, ".mdl").getString(), 0, true);
+	bool ok = mp_model->AddGeom(Gfx::GetModelFileName(p_model_name, ".mdl").getString(), 0, true);
+	FILE *f = FrameDiag::OpenShadow();
+	if (f) { fprintf(f, "SetModel '%s' ok=%d geoms=%d\n", p_model_name, (int)ok, mp_model ? mp_model->GetNumGeoms() : -1); fclose(f); }
+	if (mp_model)
+	{
+		mp_model->SetActive(true);
+		// Shadow meshes (e.g. Ped_Shadow) are authored with vertex alpha=0 under PS2 conventions.
+		// Force materials to use texture alpha only so the blob is not invisible.
+		mp_model->ForceAlphaFromTexture();
+	}
 }
 
 void CSimpleShadow::UpdatePosition(Mth::Vector& parentPos, Mth::Matrix& parentMatrix, Mth::Vector normal)
@@ -197,8 +207,40 @@ void CSimpleShadow::UpdatePosition(Mth::Vector& parentPos, Mth::Matrix& parentMa
 	//Dbg_MsgAssert(mp_model,("nullptr mp_model"));
 	if (mp_model)
 	{
+		// Per-instance bucket so each CSimpleShadow (player + each NPC) gets its own count.
+		static const int NUM_BUCKETS = 32;
+		static struct { void *p; int c; } s_buckets[NUM_BUCKETS] = {{0,0}};
+		int slot = -1;
+		for (int i = 0; i < NUM_BUCKETS; i++)
+		{
+			if (s_buckets[i].p == (void*)this) { slot = i; break; }
+		}
+		if (slot < 0)
+		{
+			for (int i = 0; i < NUM_BUCKETS; i++)
+			{
+				if (s_buckets[i].p == nullptr) { s_buckets[i].p = (void*)this; slot = i; break; }
+			}
+		}
+		if (slot >= 0)
+		{
+			int c = ++s_buckets[slot].c;
+			if (c <= 3 || (c & 127) == 0)
+			{
+				Mth::Vector dp = display_matrix.GetPos();
+				FILE *f = FrameDiag::OpenShadow();
+				if (f)
+				{
+					fprintf(f, "SIMPLESHADOW: this=%p call#%d mp_model=%p active=%d geoms=%d parent=(%.1f,%.1f,%.1f) disp=(%.1f,%.1f,%.1f) scale=%.2f\n",
+						(void*)this, c, mp_model, (int)mp_model->GetActive(), mp_model->GetNumGeoms(),
+						parentPos[X], parentPos[Y], parentPos[Z],
+						dp[X], dp[Y], dp[Z], m_scale);
+					fclose(f);
+				}
+			}
+		}
 		mp_model->Render(&display_matrix,true,nullptr);
-	}	
+	}
 }
 
 void CSimpleShadow::Hide()

@@ -28,6 +28,7 @@ namespace NxWn32
 #define MATFLAG_EXPLICIT_UV_WIBBLE			(1<<14)		// Uses explicit uv wibble (set via script) rather than calculated.
 #define MATFLAG_WATER_EFFECT				(1<<27)		// This material should be processed to provide the water effect.
 #define MATFLAG_NO_MAT_COL_MOD				(1<<28)		// No material color modulation required (all passes have m.rgb = 0.5).
+#define MATFLAG_SHADOW						(1<<25)		// This material is used for a blob shadow: skip vertex alpha, force polygon offset to avoid z-fighting with ground.
 
 const uint32 MAX_PASSES = 4;
 

@@ -129,6 +129,10 @@ public:
 	static void					sSetDiffuseLightModulationFactor(int light_index, float factor);
 	static float				sGetDiffuseLightModulationFactor(int light_index);
 
+	// Per-frame brightness computed from m_brightness * modulation_factor.
+	static float				sGetAmbientBrightness()					{ return s_ambient_brightness; }
+	static float				sGetDiffuseBrightness(int light_index)	{ return s_diffuse_brightness[light_index]; }
+
 	// Push and pop world lights on stack
 	static void					sPushWorldLights();
 	static bool					sPopWorldLights();

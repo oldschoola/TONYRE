@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <Sys/File/filesys.h>
+#include <Gfx/FrameDiag.h>
 #include "nx_init.h"
 #include "chars.h"
 #include "texture.h"
@@ -42,6 +43,16 @@ sTexture::~sTexture()
 	if (Data != nullptr)
 		delete[] Data;
 
+	if (GLFramebuffer != 0)
+	{
+		glDeleteFramebuffers(1, &GLFramebuffer);
+		GLFramebuffer = 0;
+	}
+	if (GLDepthRenderbuffer != 0)
+	{
+		glDeleteRenderbuffers(1, &GLDepthRenderbuffer);
+		GLDepthRenderbuffer = 0;
+	}
 	glDeleteTextures(1, &GLTexture);
 }
 
@@ -65,39 +76,58 @@ void sTexture::Set( int pass )
 /******************************************************************/
 bool sTexture::SetRenderTarget( int width, int height, int depth, int z_depth )
 {
-	(void)width;
-	(void)height;
 	(void)depth;
 	(void)z_depth;
-	/*
-	HRESULT		hr;
-	
-	if( pD3DTexture )
+
+	BaseWidth = (uint16)width;
+	BaseHeight = (uint16)height;
+	ActualWidth = (uint16)width;
+	ActualHeight = (uint16)height;
+	Levels = 1;
+	TexelDepth = 32;
+	PaletteDepth = 0;
+	DXT = 0;
+	IsRenderTarget = true;
+
+	glBindTexture(GL_TEXTURE_2D, GLTexture);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
+	// Border color = (1,1,1,0) so sampling outside the projection gives "no shadow here".
+	float border[4] = { 1.0f, 1.0f, 1.0f, 0.0f };
+	glTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, border);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+
+	if (GLFramebuffer == 0)
 	{
-		pD3DTexture->Release();
+		glGenFramebuffers(1, &GLFramebuffer);
 	}
-	if( pD3DPalette )
+	if (GLDepthRenderbuffer == 0)
 	{
-		pD3DPalette->Release();
+		glGenRenderbuffers(1, &GLDepthRenderbuffer);
+	}
+	glBindRenderbuffer(GL_RENDERBUFFER, GLDepthRenderbuffer);
+	glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, width, height);
+
+	GLint prev_fbo = 0;
+	glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prev_fbo);
+	glBindFramebuffer(GL_FRAMEBUFFER, GLFramebuffer);
+	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, GLTexture, 0);
+	glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, GLDepthRenderbuffer);
+	GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+	glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)prev_fbo);
+
+	if (status != GL_FRAMEBUFFER_COMPLETE)
+	{
+		FILE *f = FrameDiag::OpenShadow();
+		if (f) { fprintf(f, "SetRenderTarget: FBO incomplete status=0x%x\n", status); fclose(f); }
+		return false;
 	}
 
-	// Create the shadow buffer (essentially just a depth buffer).
-	hr = D3DDevice_CreateTexture( width, height, 1, 0, D3DFMT_LIN_D24S8, 0, &pD3DTexture );
-	Dbg_Assert( hr == D3D_OK );
-	if( hr == D3D_OK )
-	{
-		// Set fields to reflect surface characteristics.
-		Checksum		= 0;
-		BaseWidth		= ActualWidth	= width;
-		BaseHeight		= ActualHeight	= height;
-		Levels			= 1;
-		TexelDepth		= depth;
-		PaletteDepth	= 0;
-		DXT				= 0;
-		return true;
-	}
-	*/
-	return false;
+	FILE *f = FrameDiag::OpenShadow();
+	if (f) { fprintf(f, "SetRenderTarget: w=%d h=%d tex=%u fbo=%u rbo=%u OK\n", width, height, GLTexture, GLFramebuffer, GLDepthRenderbuffer); fclose(f); }
+	return true;
 }
 
 

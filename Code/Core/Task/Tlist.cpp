@@ -28,6 +28,11 @@
 #include <Sys/Profiler.h>			// Including for debugging
 #include <Sys/timer.h>				// Including for debugging
 
+#if defined(DEBUG_IMGUI)
+#include <SDL.h>
+#include "Plugins/ImGui/Panels/PerformancePanel.h"
+#endif
+
 /*****************************************************************************
 **							  DBG Information								**
 *****************************************************************************/
@@ -151,7 +156,22 @@ void		List::Process( bool time, uint mask )
 					// only call the task if it is not masked off
 					if (! (task->GetMask() & mask))
 					{
+#if defined(DEBUG_IMGUI)
+						const bool perf_enabled = Debug::PerformancePanel::IsEnabled();
+						uint64_t task_t0 = perf_enabled ? SDL_GetPerformanceCounter() : 0;
 						task->vCall();
+						if (perf_enabled)
+						{
+							uint64_t task_t1 = SDL_GetPerformanceCounter();
+							const double freq = static_cast<double>(SDL_GetPerformanceFrequency());
+							const float ms = (freq > 0.0)
+								? static_cast<float>(static_cast<double>(task_t1 - task_t0) * 1000.0 / freq)
+								: 0.0f;
+							Debug::PerformancePanel::RecordTaskSpike(task->GetCode(), ms);
+						}
+#else
+						task->vCall();
+#endif
 					}
 #ifdef		__USE_PROFILER__			
 #ifdef __PLAT_NGPS__

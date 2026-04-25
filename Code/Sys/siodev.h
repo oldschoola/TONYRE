@@ -27,6 +27,8 @@
 #include <Core/Task.h>
 #include <Core/Support/Ref.h>
 
+#include <cstdint>
+
 #ifdef __PLAT_NGPS__
 #include <libpad.h>
 #endif
@@ -121,11 +123,11 @@ public :
 	virtual					~Device();
 
 	void			        Acquire ( void );
-	void			        Unacquire ( void );           
+	void			        Unacquire ( void );
     void                    ActivateActuator( int act_num, int percent );
     void                    ActivatePressureSensitiveMode( void );
     void                    DeactivatePressureSensitiveMode( void );
-    
+
     int                     GetType( void );
     int                     GetPort( void );
     int                     GetSlot( void );
@@ -137,8 +139,8 @@ public :
     bool                    HasValidControlData( void );
 	bool					IsPluggedIn();
 	bool					Enabled() {return !m_data.m_actuators_disabled;}
-	
-									
+
+
 	void					Pause(); 	// K: Called when game is paused, so that the pad temporarily stops vibrating.
 	void					UnPause();	// K: Called when game is unpaused.
 	void					DisableActuators();	// K: Disables vibration
@@ -147,7 +149,26 @@ public :
 
 							// K: Stops vibration, and ensures it won't get turned on again when
 							// the game is unpaused.
-	void					StopAllVibrationIncludingSaved(); 
+	void					StopAllVibrationIncludingSaved();
+
+	// DualSense-era extensions. On Win32 these drive the attached DualSense
+	// pad (when present). On other platforms they default to no-op so PS2 /
+	// Xbox builds keep compiling without platform-layer changes.
+	// Hand: 0=Left trigger, 1=Right trigger, 2=Both.
+	// Preset: 0=reset, 1=bow, 2=weapon, 3=machinegun, 4=galloping, 5=gamecube.
+#ifdef __PLAT_WN32__
+	void					SetAdaptiveTriggerPreset( int hand, int preset );
+	void					SetLightbarColor( std::uint8_t r, std::uint8_t g, std::uint8_t b );
+	void					SetPlayerLedIndex( int zero_based );
+	bool					GetTouchpadPosition( float& x, float& y, bool& touching );
+	bool					GetGyro( float& x, float& y, float& z );
+#else
+	void					SetAdaptiveTriggerPreset( int hand, int preset ) { (void)hand; (void)preset; }
+	void					SetLightbarColor( std::uint8_t r, std::uint8_t g, std::uint8_t b ) { (void)r; (void)g; (void)b; }
+	void					SetPlayerLedIndex( int zero_based ) { (void)zero_based; }
+	bool					GetTouchpadPosition( float& x, float& y, bool& touching ) { (void)x; (void)y; (void)touching; return false; }
+	bool					GetGyro( float& x, float& y, float& z ) { (void)x; (void)y; (void)z; return false; }
+#endif
 
 private :
 
@@ -175,8 +196,14 @@ private :
     State                   m_state;
     State                   m_next_state;
     int                     m_index;
-    
+
 	bool					m_plugged_in; // K: True if the pad is plugged in & acquired, false otherwise.
+
+	// DualSense / DualShock 4 dual-motor vibration state (per act_num).
+	std::uint8_t			m_left_rumble = 0;
+	std::uint8_t			m_right_rumble = 0;
+	std::uint8_t			m_left_rumble_saved = 0;
+	std::uint8_t			m_right_rumble_saved = 0;
 	
     void                    process( void );
     void			        read_data ( void );         

@@ -59,6 +59,12 @@ namespace Tmr
 
 static float s_slomo = 1.0f;
 
+// Fixed-step override for game logic ticks. When s_fixed_delta_active is true,
+// UncappedFrameLength() returns s_fixed_delta_value instead of wall-clock delta.
+// FrameLength() still composes that with slomo, so component math is unchanged.
+static bool   s_fixed_delta_active = false;
+static double s_fixed_delta_value  = 1.0 / 60.0;
+
 /*****************************************************************************
 **								 Public Data								**
 *****************************************************************************/
@@ -200,8 +206,23 @@ float FrameLength()
 
 double UncappedFrameLength()
 {
-	return delta;
-	// return 1.0 / 60.0;
+	return s_fixed_delta_active ? s_fixed_delta_value : delta;
+}
+
+void SetFixedFrameDelta(double seconds)
+{
+	s_fixed_delta_active = true;
+	s_fixed_delta_value  = seconds;
+}
+
+void ClearFixedFrameDelta()
+{
+	s_fixed_delta_active = false;
+}
+
+double GetWallTimeSeconds()
+{
+	return GetDoubleTime();
 }
 
 void VSync(void)

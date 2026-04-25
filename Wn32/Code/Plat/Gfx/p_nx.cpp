@@ -1,4 +1,5 @@
 #include <Sys/File/filesys.h>
+#include <cmath>
 
 #include <Gfx/camera.h>
 #include <Gfx/gfxman.h>
@@ -9,6 +10,7 @@
 #include <Gfx/nxparticlemgr.h>
 #include <Gfx/NxMiscFX.h>
 #include <Gfx/debuggfx.h>
+#include <Gfx/FrameDiag.h>
 #include <Core/math.h>
 #include <Sk/Engine/SuperSector.h>
 #include <Gel/Scripting/script.h>
@@ -18,6 +20,8 @@
 #include "p_NxGeom.h"
 #include "p_NxSprite.h"
 #include "p_NxModel.h"
+#include "p_nxtexture.h"
+#include "p_nxscene.h"
 #include "p_nxnewparticlemgr.h"
 #include "p_nxweather.h"
 
@@ -26,10 +30,21 @@
 #include "nx/render.h"
 #include "nx/occlude.h"
 
+#if defined(DEBUG_IMGUI)
+#include "Plugins/ImGui/ImGuiLayer.h"
+#include "Plugins/ImGui/Panels/PerformancePanel.h"
+#endif
+
 #include <stdlib.h>
 
 namespace Nx
 {
+
+// GPU pre-render queue limiter. We insert a fence after each SwapWindow and
+// wait on it at the top of the next frame so the driver never queues more
+// than one frame of GL work ahead of the GPU. Without this the NVIDIA/AMD
+// driver may buffer 2-3 frames, adding 33-50 ms of input lag at 60 fps.
+static GLsync g_prev_frame_fence = nullptr;
 
 /******************************************************************/
 /*                                                                */
@@ -56,6 +71,12 @@ namespace Nx
 		SDL_Event event;
 		while (SDL_PollEvent(&event))
 		{
+#if defined(DEBUG_IMGUI)
+			// SDL is our WndProc equivalent — forward every event so ImGui
+			// can track keyboard, mouse, focus, resize, and clipboard state.
+			Debug::ImGuiLayer::ProcessEvent(&event);
+#endif
+
 			switch (event.type)
 			{
 				case SDL_QUIT:
@@ -73,8 +94,52 @@ namespace Nx
 							break;
 					}
 					break;
+#if defined(DEBUG_IMGUI)
+				case SDL_KEYDOWN:
+					if (event.key.repeat == 0)
+					{
+						if (event.key.keysym.sym == SDLK_F1)
+							Debug::ImGuiLayer::ToggleVisible();
+						else if (event.key.keysym.sym == SDLK_F2)
+							Debug::ImGuiLayer::ToggleLevelEditor();
+						else if (event.key.keysym.sym == SDLK_F3)
+							Debug::ImGuiLayer::ToggleObjectEditor();
+					}
+					break;
+#endif
 			}
 		}
+
+		// Block here until the previous frame's GPU work has completed.
+		// Caps driver pre-render queue at 1 frame for low input lag. Disabling the
+		// limiter via the perf panel hands queue depth control back to the driver,
+		// trading input lag for higher throughput.
+#if defined(DEBUG_IMGUI)
+		const bool limit_queue = Debug::PerformancePanel::IsPrerenderQueueLimited();
+#else
+		const bool limit_queue = true;
+#endif
+		if (g_prev_frame_fence != nullptr)
+		{
+			if (limit_queue)
+			{
+#if defined(DEBUG_IMGUI)
+				const uint64_t t_wait_start = SDL_GetPerformanceCounter();
+#endif
+				glClientWaitSync(g_prev_frame_fence, GL_SYNC_FLUSH_COMMANDS_BIT, 50000000ULL);
+#if defined(DEBUG_IMGUI)
+				Debug::PerformancePanel::RecordGpuWaitForLastFrame(
+					SDL_GetPerformanceCounter() - t_wait_start);
+#endif
+			}
+			glDeleteSync(g_prev_frame_fence);
+			g_prev_frame_fence = nullptr;
+		}
+
+#if defined(DEBUG_IMGUI)
+		Debug::PerformancePanel::BeginFrame();
+		Debug::ImGuiLayer::BeginFrame();
+#endif
 	}
 
 
@@ -132,14 +197,55 @@ namespace Nx
 		NxWn32::EngineGlobals.fullscreen_quad->Bind();
 		glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, nullptr);
 
+#if defined(DEBUG_IMGUI)
+		// Overlay draws on backbuffer (FBO 0 already bound above) right
+		// before Present so game geometry is fully composited underneath.
+		Debug::PerformancePanel::RecordCheckpoint("render");
+		Debug::ImGuiLayer::Render();
+		Debug::PerformancePanel::RecordCheckpoint("imgui");
+#endif
+
+#if defined(DEBUG_IMGUI)
+		// Honour any pending VSync change from the perf panel before swapping.
+		// Edge-triggered: ConsumePendingSwapInterval returns true exactly once.
+		if (Debug::PerformancePanel::ConsumePendingSwapInterval())
+			NxWn32::ApplySwapInterval(Debug::PerformancePanel::GetSwapInterval());
+#endif
+
 		// Swap window
 		SDL_GL_SwapWindow(NxWn32::EngineGlobals.window);
+
+#if defined(DEBUG_IMGUI)
+		Debug::PerformancePanel::RecordSwapIssued();
+#endif
+
+		// Mark the end of this frame's GL commands. Next frame's pre_render
+		// blocks on this fence so we never queue more than one frame ahead.
+		// Skipped when the queue limiter is off so the driver can buffer freely.
+#if defined(DEBUG_IMGUI)
+		if (Debug::PerformancePanel::IsPrerenderQueueLimited())
+#endif
+		{
+			g_prev_frame_fence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+		}
+
+#if defined(DEBUG_IMGUI)
+		Debug::PerformancePanel::RecordCheckpoint("swap");
+		Debug::PerformancePanel::EndFrame();
+#endif
 
 		// Increment frame counter
 		NxWn32::EngineGlobals.frame_count++;
 
-		// Wait for next frame (60 fps)
+		// Wait for next frame (60 fps when capped, returns immediately when uncapped)
+#if defined(DEBUG_IMGUI)
+		const uint64_t t_pace_start = SDL_GetPerformanceCounter();
+#endif
 		NxWn32::WaitForNextFrame();
+#if defined(DEBUG_IMGUI)
+		Debug::PerformancePanel::RecordPacingWait(
+			SDL_GetPerformanceCounter() - t_pace_start);
+#endif
 	}
 
 
@@ -159,6 +265,12 @@ namespace Nx
 		// Clear the screen
 		glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
 		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+		// Render detailed shadow casters into their projector FBOs before the world
+		// is drawn. render_shadow_targets binds/unbinds its own FBO so the backbuffer
+		// remains the target afterwards; it also publishes shadow_texture_id +
+		// shadow_tex_proj_matrix into EngineGlobals for the mesh draw path to sample.
+		NxWn32::render_shadow_targets();
 
 		// Process imposters
 		CEngine::sGetImposterManager()->ProcessImposters();
@@ -285,11 +397,31 @@ namespace Nx
 			NxWn32::render_instances(NxWn32::vRENDER_SEMITRANSPARENT | NxWn32::vRENDER_INSTANCE_POST_WORLD_SEMITRANSPARENT);
 		}
 
+		#define FRAME_TRACE(tag) do { \
+			FILE *_f = FrameDiag::OpenFrameTrace(); \
+			if (_f) { fprintf(_f, "%s\n", tag); fclose(_f); } \
+		} while(0)
+
+		FRAME_TRACE("post-viewport-loop");
+
+		// Update + render new-style particles once per frame, after all viewports are drawn.
+		if (CEngine::sGetParticleManager())
+		{
+			FRAME_TRACE("pre-particle-update");
+			CEngine::sGetParticleManager()->UpdateParticles();
+			FRAME_TRACE("post-particle-update");
+			CEngine::sGetParticleManager()->RenderParticles();
+			FRAME_TRACE("post-particle-render");
+		}
+
 		// Reset viewport
 		glViewport(0, 0, NxWn32::EngineGlobals.backbuffer_width, NxWn32::EngineGlobals.backbuffer_height);
+		FRAME_TRACE("post-viewport-reset");
 
 		// Draw 2D sprites
 		NxWn32::SDraw2D::DrawAll();
+		FRAME_TRACE("post-sdraw2d-drawall");
+		#undef FRAME_TRACE
 	}
 
 
@@ -782,11 +914,15 @@ namespace Nx
 	/******************************************************************/
 	Nx::CTexture *CEngine::s_plat_create_render_target_texture(int width, int height, int depth, int z_depth)
 	{
-		(void)width;
-		(void)height;
-		(void)depth;
-		(void)z_depth;
-		return nullptr;
+		CXboxTexture *p_tex = new CXboxTexture;
+		NxWn32::sTexture *p_engine_tex = new NxWn32::sTexture;
+		p_tex->SetEngineTexture(p_engine_tex);
+		if( !p_engine_tex->SetRenderTarget(width, height, depth, z_depth) )
+		{
+			FILE *f = FrameDiag::OpenShadow();
+			if (f) { fprintf(f, "s_plat_create_render_target_texture: FAILED w=%d h=%d\n", width, height); fclose(f); }
+		}
+		return p_tex;
 	}
 
 
@@ -797,9 +933,39 @@ namespace Nx
 	/******************************************************************/
 	void CEngine::s_plat_project_texture_into_scene(Nx::CTexture *p_texture, Nx::CModel *p_model, Nx::CScene *p_scene)
 	{
-		(void)p_texture;
-		(void)p_model;
-		(void)p_scene;
+		if( !p_texture || !p_model ) return;
+
+		CXboxTexture *p_xbox_tex = static_cast<CXboxTexture*>(p_texture);
+		CXboxModel   *p_xbox_model = static_cast<CXboxModel*>(p_model);
+		NxWn32::sTexture *p_engine_tex = p_xbox_tex->GetEngineTexture();
+		NxWn32::sScene   *p_engine_scene = nullptr;
+
+		// If scene not explicitly passed, derive from caster model's first geom's instance.
+		if( p_scene )
+		{
+			CXboxScene *p_xbox_scene = static_cast<CXboxScene*>(p_scene);
+			p_engine_scene = p_xbox_scene->GetEngineScene();
+		}
+
+		NxWn32::create_texture_projection_details(p_engine_tex, p_xbox_model, p_engine_scene);
+
+		// Caster identity at main-pass render is determined via SCENE_FLAG_SELF_SHADOWS
+		// (set on caster instance scenes by render_shadow_targets each frame).
+		// No need to stash a single instance pointer — skater has many geom instances.
+
+		// Register every loaded world scene as a receiver so the skater's shadow falls onto the world.
+		for (int i = 0; i < MAX_LOADED_SCENES; ++i)
+		{
+			if( sp_loaded_scenes[i] == nullptr ) continue;
+			CXboxScene *p_xb = static_cast<CXboxScene*>(sp_loaded_scenes[i]);
+			if( p_xb && p_xb->GetEngineScene() )
+			{
+				p_xb->GetEngineScene()->m_flags |= SCENE_FLAG_RECEIVE_SHADOWS;
+			}
+		}
+
+		FILE *f = FrameDiag::OpenShadow();
+		if (f) { fprintf(f, "s_plat_project_texture_into_scene: tex=%p model=%p\n", (void*)p_engine_tex, (void*)p_xbox_model); fclose(f); }
 	}
 
 
@@ -810,8 +976,45 @@ namespace Nx
 	/******************************************************************/
 	void CEngine::s_plat_set_projection_texture_camera(Nx::CTexture *p_texture, Gfx::Camera *p_camera)
 	{
-		(void)p_texture;
-		(void)p_camera;
+		if( !p_texture || !p_camera ) return;
+		CXboxTexture *p_xbox_tex = static_cast<CXboxTexture*>(p_texture);
+		NxWn32::sTexture *p_engine_tex = p_xbox_tex->GetEngineTexture();
+		if( !p_engine_tex ) return;
+
+		// Camera position is the "eye" of the projection. Look-at is along -Z of camera matrix, one unit away from eye.
+		Mth::Vector cam_pos = p_camera->GetPos();
+		Mth::Matrix cam_mat = p_camera->GetMatrix();
+		Mth::Vector cam_at  = cam_pos + cam_mat[Z] * 1.0f;
+
+		glm::vec3 glm_pos((float)cam_pos[X], (float)cam_pos[Y], (float)cam_pos[Z]);
+		glm::vec3 glm_at ((float)cam_at[X],  (float)cam_at[Y],  (float)cam_at[Z]);
+
+		// Guard NaN/Inf — skip update, keep last good camera matrices.
+		auto finite3 = [](const glm::vec3& v) {
+			return (v.x == v.x) && (v.y == v.y) && (v.z == v.z)
+			    && !std::isinf(v.x) && !std::isinf(v.y) && !std::isinf(v.z);
+		};
+		if( !finite3(glm_pos) || !finite3(glm_at) )
+		{
+			static int s_nan = 0;
+			if( (s_nan++ % 240) == 0 ) {
+				FILE *f = FrameDiag::OpenShadow();
+				if (f) { fprintf(f, "PROJCAM NaN skipped tex=%p pos=(%.1f,%.1f,%.1f) at=(%.1f,%.1f,%.1f)\n",
+					(void*)p_engine_tex, glm_pos.x, glm_pos.y, glm_pos.z, glm_at.x, glm_at.y, glm_at.z); fclose(f); }
+			}
+			return;
+		}
+
+		{
+			static int s_call = 0;
+			if( (s_call++ % 120) == 0 ) {
+				FILE *f = FrameDiag::OpenShadow();
+				if (f) { fprintf(f, "PROJCAM[%d] tex=%p pos=(%.1f,%.1f,%.1f) at=(%.1f,%.1f,%.1f)\n",
+					s_call, (void*)p_engine_tex, glm_pos.x, glm_pos.y, glm_pos.z, glm_at.x, glm_at.y, glm_at.z); fclose(f); }
+			}
+		}
+
+		NxWn32::set_texture_projection_camera(p_engine_tex, glm_pos, glm_at);
 	}
 
 
@@ -822,7 +1025,14 @@ namespace Nx
 	/******************************************************************/
 	void CEngine::s_plat_stop_projection_texture(Nx::CTexture *p_texture)
 	{
-		(void)p_texture;
+		if( !p_texture ) return;
+		CXboxTexture *p_xbox_tex = static_cast<CXboxTexture*>(p_texture);
+		NxWn32::sTexture *p_engine_tex = p_xbox_tex->GetEngineTexture();
+		if( p_engine_tex )
+		{
+			NxWn32::destroy_texture_projection_details(p_engine_tex);
+		}
+		NxWn32::EngineGlobals.caster_instance = nullptr;
 	}
 
 

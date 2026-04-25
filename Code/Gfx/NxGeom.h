@@ -101,6 +101,7 @@ public:
 	void				SetBoneMatrixData( Mth::Matrix* pBoneMatrices, int numBones );
 	bool				HidePolys(uint32 mask);
 	bool				EnableShadow(bool enabled);
+	void				ForceAlphaFromTexture();	// Force all passes to ignore vertex alpha (use texture alpha only). For shadows, FX.
 
 	// used by CModelBuilder to figure out which color modulation function to use
 	bool				MultipleColorsEnabled();
@@ -189,6 +190,7 @@ private:
 	virtual void		plat_set_bone_matrix_data( Mth::Matrix* pBoneMatrices, int numBones );
 	virtual bool		plat_hide_polys(uint32 mask);
 	virtual bool		plat_enable_shadow( bool enabled );
+	virtual void		plat_force_alpha_from_texture();
 
 	virtual	size_t 		plat_get_num_render_polys();
 	virtual	size_t 		plat_get_num_render_base_polys();

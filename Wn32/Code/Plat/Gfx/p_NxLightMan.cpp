@@ -80,7 +80,7 @@ bool CLightManager::s_plat_set_light_ambient_color( void )
 /******************************************************************/
 Image::RGBA	CLightManager::s_plat_get_light_ambient_color()
 {
-	return Image::RGBA(); // s_world_lights.m_light_ambient_rgba;
+	return s_world_lights.m_light_ambient_rgba;
 }
 
 
@@ -110,11 +110,7 @@ bool CLightManager::s_plat_set_light_direction( int light_index )
 /******************************************************************/
 const Mth::Vector & CLightManager::s_plat_get_light_direction( int light_index )
 {
-	(void)light_index;
-	// static Mth::Vector dir;
-	// dir.Set( s_world_lights.m_light_direction[light_index][X], s_world_lights.m_light_direction[light_index][Y], s_world_lights.m_light_direction[light_index][Z] );
-	static Mth::Vector why_ref;
-	return why_ref;
+	return s_world_lights.m_light_direction[light_index];
 }
 
 
@@ -145,8 +141,7 @@ bool CLightManager::s_plat_set_light_diffuse_color( int light_index )
 /******************************************************************/
 Image::RGBA	CLightManager::s_plat_get_light_diffuse_color( int light_index )
 {
-	(void)light_index;
-	return Image::RGBA(); // s_world_lights.m_light_diffuse_rgba[light_index];
+	return s_world_lights.m_light_diffuse_rgba[light_index];
 }
 
 

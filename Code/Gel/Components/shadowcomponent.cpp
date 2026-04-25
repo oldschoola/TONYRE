@@ -23,6 +23,7 @@
 #include <Gfx/NxModel.h>
 #include <Gfx/NxLight.h>
 #include <Gfx/shadow.h>
+#include <Gfx/FrameDiag.h>
 
 namespace Obj
 {
@@ -105,6 +106,12 @@ void CShadowComponent::InitFromStructure( Script::CStruct* pParams )
 	m_shadowType = Crc::ConstCRC("simple");
 	pParams->GetChecksum( Crc::ConstCRC("ShadowType"), &m_shadowType, Script::NO_ASSERT );
 
+	// NOTE: Auto-upgrading NPCs from "simple" to "detailed" breaks the renderer —
+	// EngineGlobals.shadow_* is single-projector state; every NPC's projector
+	// overwrites the previous one each frame, last one wins, skater's shadow is lost
+	// and the entire world gets shadowed from a random NPC's FBO. Detailed shadow
+	// is therefore skater-only until the receiver pass is multi-projector aware.
+
 	if ( mp_shadow )
 	{
 		// get rid of existing shadow, in case it was the wrong type...
@@ -130,6 +137,15 @@ void CShadowComponent::InitFromStructure( Script::CStruct* pParams )
 				Gfx::CSimpleShadow* pSimpleShadow = (Gfx::CSimpleShadow*)mp_shadow;
 				pSimpleShadow->SetScale( scale );
 				pSimpleShadow->SetModel( p_shadow_model_name );
+
+				{
+					FILE *f = FrameDiag::OpenShadow();
+					if (f) {
+						fprintf(f, "SHADOW_CREATE: objID=%u shadow=%p model='%s' scale=%.2f\n",
+							(unsigned)GetObj()->GetID(), (void*)pSimpleShadow, p_shadow_model_name, scale);
+						fclose(f);
+					}
+				}
 
 				// GJ:  need to immediately change the shadow's position if Obj_ShadowOn gets called
 				// this is because sometimes the shadow component will be suspended, and so
@@ -288,9 +304,10 @@ void CShadowComponent::Update()
 
 	if ( GetObj()->GetID() < Mdl::Skate::vMAX_SKATERS )
 	{
-		// the skater shadows are handled elsewhere by other components
-		// (CSkaterAdjustPhysicsComponent or CWalkComponent)
-//		SetShadowPos( GetObj()->GetPos() );
+		// Skater simple-shadow position (m_shadowPos) is set by CSkaterAdjustPhysicsComponent.
+		// Skater detailed-shadow still needs UpdatePosition() called each frame so the
+		// projector camera tracks the skater — the Xbox path that did this lives in
+		// skater.cpp:1014-1030 (commented out). Drive it from here for now.
 	}
 	else
 	{

@@ -84,6 +84,7 @@ const uint MATFLAG_BUMP_LOAD_MATRIX = (1u<<10u); // This pass requires the bump 
 const uint MATFLAG_PASS_TEXTURE_ANIMATES = (1u<<11u); // This pass has a texture which animates.
 const uint MATFLAG_PASS_IGNORE_VERTEX_ALPHA = (1u<<12u); // This pass should not have the texel alpha modulated by the vertex alpha.
 const uint MATFLAG_EXPLICIT_UV_WIBBLE = (1u<<14u); // Uses explicit uv wibble (set via script) rather than calculated.
+const uint MATFLAG_SHADOW = (1u<<25u); // Blob shadow: force solid dark output, ignore texture alpha if broken.
 const uint MATFLAG_WATER_EFFECT = (1u<<27u); // This material should be processed to provide the water effect.
 const uint MATFLAG_NO_MAT_COL_MOD = (1u<<28u); // No material color modulation required (all passes have m.rgb = 0.5).
 
@@ -120,10 +121,14 @@ layout (location = 5) in vec2 i_uv[4];
 
 out vec2 f_uv[4];
 out vec4 f_col;
+out vec4 f_shadow_uv;
+out vec3 f_wpos;
+out vec3 f_nor;
 
 uniform mat4 u_m;
 uniform mat4 u_v;
 uniform mat4 u_p;
+uniform mat4 u_tex_proj;
 
 void main()
 {
@@ -131,8 +136,13 @@ void main()
 	vec4 pos = (u_p * u_v * u_m) * vec4(i_pos, 1.0f);
 	vec3 nor = (u_m * vec4(i_nor, 0.0f)).xyz;
 
+	vec4 wpos = u_m * vec4(i_pos, 1.0f);
 	vec4 vpos = (u_v * u_m) * vec4(i_pos, 1.0f);
 	vec3 vnor = (u_v * vec4(nor, 0.0f)).xyz;
+
+	f_shadow_uv = u_tex_proj * wpos;
+	f_wpos = wpos.xyz;
+	f_nor = nor;
 
 	gl_Position = pos;
 
@@ -169,10 +179,14 @@ layout (location = 5) in vec2 i_uv[4];
 
 out vec2 f_uv[4];
 out vec4 f_col;
+out vec4 f_shadow_uv;
+out vec3 f_wpos;
+out vec3 f_nor;
 
 uniform mat4 u_m;
 uniform mat4 u_v;
 uniform mat4 u_p;
+uniform mat4 u_tex_proj;
 
 uniform mat4 u_bone[55];
 
@@ -202,12 +216,17 @@ void main()
 	vec4 vpos = (u_v) * vec4(wpos.xyz, 1.0f);
 	vec3 vnor = (u_v * vec4(nor, 0.0f)).xyz;
 
+	f_shadow_uv = u_tex_proj * wpos;
+	f_wpos = wpos.xyz;
+	f_nor = nor;
+
 	gl_Position = pos;
 
-	// Calculate lights
-	float light_0 = max(-dot(nor, u_light_dir[0].xyz), u_light_dir[0].w);
-	float light_1 = max(-dot(nor, u_light_dir[1].xyz), u_light_dir[1].w);
-	float light_2 = max(-dot(nor, u_light_dir[2].xyz), u_light_dir[2].w);
+	// Calculate lights. u_light_dir is "to light" (anim.cpp negates the
+	// stored world-space "from light" direction before upload).
+	float light_0 = max(dot(nor, u_light_dir[0].xyz), u_light_dir[0].w);
+	float light_1 = max(dot(nor, u_light_dir[1].xyz), u_light_dir[1].w);
+	float light_2 = max(dot(nor, u_light_dir[2].xyz), u_light_dir[2].w);
 
 	vec3 light_col = u_light_amb;
 	light_col += u_light_col[0] * light_0;
@@ -238,21 +257,32 @@ void main()
 		}
 	}
 
-	// Pass vertex color
-	f_col = i_col; // (i_col + vec4(spec, spec, spec, 0.0f) * 5.0f);
+	// Pass vertex color modulated by scene lighting. Fragment shader's *4.0
+	// overbright is the PS2 "128 = white, room to spare" headroom path —
+	// light_col is already in 0..2 (0x80 = 1.0) so we keep unity here.
+	f_col = i_col * vec4(light_col, 1.0f);
 }
 	)";
 
 	static std::string basic_fragment = shader_header + R"(
 in vec2 f_uv[4];
 in vec4 f_col;
+in vec4 f_shadow_uv;
+in vec3 f_wpos;
+in vec3 f_nor;
 
 layout (location = 0) out vec4 o_col;
 
 uniform sampler2D u_texture[4];
+uniform sampler2D u_shadow_tex;
 
 uniform uint u_blend[4];
 uniform vec4 u_col[4];
+
+uniform int  u_shadow_enabled;
+uniform vec3 u_shadow_origin;
+uniform float u_shadow_fade_near;
+uniform float u_shadow_fade_far;
 
 void main()
 {
@@ -285,6 +315,13 @@ void main()
 		r0.a = t[0].a * f_col.a * 2.0f;
 
 	r0.rgb *= f_col.rgb * 4.0f;
+
+	// Shadow: force dark color, use texture alpha directly for blob shape.
+	if ((u_pass_flag[0] & MATFLAG_SHADOW) != 0u)
+	{
+		r0.rgb = vec3(0.0, 0.0, 0.0);
+		r0.a = t[0].a;
+	}
 
 	// Accumulate remaining passes
 	vec4 rl = r0;
@@ -346,6 +383,36 @@ void main()
 		}
 		
 		rl = r;
+	}
+
+	// Detailed shadow projection — sample the projector FBO and darken receiver.
+	// The caster pass writes alpha=1 wherever the caster silhouette is; alpha=0 elsewhere.
+	// u_shadow_enabled is 0 when the caller does not want shadow modulation
+	// (e.g. shadow receivers disabled, or when rendering the caster itself).
+	// Projector is top-down ortho, so its silhouette texture hits any surface the
+	// ray crosses — including adjacent walls. Gate by surface-up dot so walls
+	// (normal ~horizontal) don't receive the shadow copy. Floors keep it full.
+	if (u_shadow_enabled != 0 && (u_pass_flag[0] & MATFLAG_SHADOW) == 0u)
+	{
+		vec3 s = f_shadow_uv.xyz / max(f_shadow_uv.w, 0.0001f);
+		if (f_shadow_uv.w > 0.0f &&
+		    s.x >= 0.0f && s.x <= 1.0f &&
+		    s.y >= 0.0f && s.y <= 1.0f &&
+		    s.z >= 0.0f && s.z <= 1.0f)
+		{
+			float shadow_mask = texture(u_shadow_tex, s.xy).a;
+			float dist = distance(f_wpos, u_shadow_origin);
+			float fade = 1.0 - smoothstep(u_shadow_fade_near, u_shadow_fade_far, dist);
+			// Only kill shadow on near-vertical walls (n dot UP ≈ 0). Floors
+			// and slopes (dot > ~0.3, ≤ 72° from up) get full shadow. Previous
+			// smoothstep(0.3, 0.7) cut off slopes and flickered off ground tris
+			// with slight normal variance after interpolation.
+			vec3 n = f_nor;
+			float nl = length(n);
+			float up_dot = (nl > 0.001) ? max(n.y / nl, 0.0) : 1.0;
+			float surface_factor = smoothstep(0.1, 0.3, up_dot);
+			r0.rgb *= mix(vec3(1.0), vec3(0.35), shadow_mask * fade * surface_factor);
+		}
 	}
 
 	o_col = r0;
@@ -413,12 +480,28 @@ void main()
 		glUseProgram(program);
 		for (int i = 0; i < 4; i++)
 			glUniform1i(glGetUniformLocation(program, ("u_texture[" + std::to_string(i) + "]").c_str()), i);
+
+		ResolveCachedUniforms();
 	}
 
 	sShader::~sShader()
 	{
 		// Delete program
 		glDeleteProgram(program);
+	}
+
+	void sShader::ResolveCachedUniforms()
+	{
+		loc_u_m                = glGetUniformLocation(program, "u_m");
+		loc_u_v                = glGetUniformLocation(program, "u_v");
+		loc_u_p                = glGetUniformLocation(program, "u_p");
+		loc_u_col              = glGetUniformLocation(program, "u_col");
+		loc_u_tex_proj         = glGetUniformLocation(program, "u_tex_proj");
+		loc_u_shadow_enabled   = glGetUniformLocation(program, "u_shadow_enabled");
+		loc_u_shadow_origin    = glGetUniformLocation(program, "u_shadow_origin");
+		loc_u_shadow_fade_near = glGetUniformLocation(program, "u_shadow_fade_near");
+		loc_u_shadow_fade_far  = glGetUniformLocation(program, "u_shadow_fade_far");
+		loc_u_shadow_tex       = glGetUniformLocation(program, "u_shadow_tex");
 	}
 
 	// Shader programs
@@ -443,6 +526,89 @@ void main()
 	sShader *BonedShader()
 	{
 		static sShader shader(boned_vertex.c_str(), basic_fragment.c_str());
+		return &shader;
+	}
+
+	// Particle shader — world-space billboard quads, textured, vertex-color tinted.
+	static std::string particle_vertex = R"(#version 330 core
+layout (location = 0) in vec3 i_pos;
+layout (location = 1) in vec2 i_uv;
+layout (location = 2) in vec4 i_col;
+
+out vec2 f_uv;
+out vec4 f_col;
+
+uniform mat4 u_view;
+uniform mat4 u_proj;
+
+void main()
+{
+	gl_Position = u_proj * u_view * vec4(i_pos, 1.0);
+	f_uv = i_uv;
+	f_col = i_col;
+}
+)";
+
+	static std::string particle_fragment = R"(#version 330 core
+in vec2 f_uv;
+in vec4 f_col;
+
+layout (location = 0) out vec4 o_col;
+
+uniform sampler2D u_texture;
+
+void main()
+{
+	o_col = texture(u_texture, f_uv) * f_col;
+}
+)";
+
+	sShader *ParticleShader()
+	{
+		static sShader shader(particle_vertex.c_str(), particle_fragment.c_str());
+		return &shader;
+	}
+
+	// Shadow caster shader — renders a skinned caster into the shadow FBO.
+	// Writes alpha=1 where the caster silhouette covers the pixel, color is ignored
+	// (receiver sampler reads .a only). This path uses the same bone skinning and layout
+	// as BonedShader so the model's vertex buffer binds directly.
+	static std::string shadow_caster_vertex = R"(#version 330 core
+layout (location = 0) in vec3 i_pos;
+layout (location = 1) in vec3 i_weight;
+layout (location = 2) in uvec4 i_index;
+
+uniform mat4 u_m;
+uniform mat4 u_v;
+uniform mat4 u_p;
+uniform mat4 u_bone[55];
+
+void main()
+{
+	vec3 skin_pos = vec3(0.0f);
+	for (int i = 0; i < 3; i++)
+	{
+		mat4 bone = u_bone[i_index[i]];
+		float weight = i_weight[i];
+		skin_pos += vec3(bone * vec4(i_pos, 1.0f)) * weight;
+	}
+
+	gl_Position = (u_p * u_v * u_m) * vec4(skin_pos, 1.0f);
+}
+)";
+
+	static std::string shadow_caster_fragment = R"(#version 330 core
+layout (location = 0) out vec4 o_col;
+void main()
+{
+	// Write pure silhouette into alpha channel; color unused.
+	o_col = vec4(0.0, 0.0, 0.0, 1.0);
+}
+)";
+
+	sShader *ShadowCasterShader()
+	{
+		static sShader shader(shadow_caster_vertex.c_str(), shadow_caster_fragment.c_str());
 		return &shader;
 	}
 

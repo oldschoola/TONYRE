@@ -1510,6 +1510,21 @@ void CModel::EnableShadow( bool enabled )
 /*                                                                */
 /******************************************************************/
 
+void CModel::ForceAlphaFromTexture()
+{
+	int numGeoms = GetNumGeoms();
+	for ( short i = 0; i < numGeoms; i++ )
+	{
+		if ( GetGeomByIndex(i) )
+			GetGeomByIndex(i)->ForceAlphaFromTexture();
+	}
+}
+
+/******************************************************************/
+/*                                                                */
+/*                                                                */
+/******************************************************************/
+
 int CModel::GetNumObjectsInHierarchy()
 {
 	// This function only works with single-CMesh items

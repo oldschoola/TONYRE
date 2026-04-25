@@ -119,6 +119,7 @@ public:
     bool                SetSkeleton( Gfx::CSkeleton* pSkeleton );
     Mth::Matrix*		GetBoneTransforms();
     void				EnableShadow(bool enabled);
+	void				ForceAlphaFromTexture();
     bool				RemovePolys();
 	uint32 				GetPolyRemovalMask();
 	void 				HidePolys( uint32 polyRemovalMask );
